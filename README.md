@@ -1,4 +1,4 @@
-# InstaHermes
+# InstaHermes.AI
 
 Sales intelligence for roofing-supply reps: find the right contractors, understand them fast, and walk into the call prepared.
 
@@ -15,7 +15,7 @@ sales_intelligence/
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp .env.example .env              # add OPENAI_API_KEY, APIFY_TOKEN, PERPLEXITY_API_KEY (optional)
-.venv/bin/python -m app.cli init  # tables + demo rep (Alex, Manhattan, ZIP 10013, 25 mi)
+.venv/bin/python -m app.cli init  # tables + demo rep (Allen, Manhattan, ZIP 10013, 25 mi)
 
 # Fill the contractor index, then build today's queue
 .venv/bin/python -m app.cli scrape-gaf "https://www.gaf.com/en-us/roofing-contractors/residential?distance=25#firstResult=20"

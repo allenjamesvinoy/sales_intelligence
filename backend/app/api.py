@@ -1,23 +1,24 @@
 import re
+import sqlite3
 from typing import Literal
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from . import accounts, db
+from . import accounts, db, llm
 from .config import DEFAULT_USER_ID
 from .db import loads, now
 from .pipeline import GAF_RADII, refresh, rep_context
 from .ranking import priority, product_fit, reason_sentence, score
 
 db.init()
-app = FastAPI(title="InstaHermes API")
+app = FastAPI(title="InstaHermes.AI API")
 refresh_status: dict[int, str] = {}
 EMAIL = re.compile(r"^[\w.+-]+@[\w-]+(\.[\w-]+)+$")
 
 Stage = Literal["recommended", "focus", "done", "dismissed"]
 Outcome = Literal["Connected", "No response", "Follow-up needed", "Qualified", "Not relevant"]
-Mode = Literal["call", "email", "text", "visit"]
+Mode = Literal["call", "email", "text", "meeting"]
 ISO_DATE = r"^\d{4}-\d{2}-\d{2}$"
 
 
@@ -34,13 +35,31 @@ class TerritoryIn(BaseModel):
 class InteractionIn(BaseModel):
     mode: Mode
     outcome: Outcome
-    note: str = ""
+    note: str = Field(default="", max_length=20000)
+    contactIds: list[int] = []
     nextAction: str | None = None
     dueDate: str | None = Field(default=None, pattern=ISO_DATE)
 
 
+class ContactIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    role: str | None = None
+    phone: str | None = None
+    email: str | None = Field(default=None, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
 class OpportunityIn(BaseModel):
     note: str = Field(min_length=1)
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=4000)
+
+
+class AssistantIn(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1, max_length=20)
+    contractorId: str | None = None
 
 
 class NextActionIn(BaseModel):
@@ -65,11 +84,10 @@ def account_json(a: dict) -> dict:
             "nextAction": a["next_action"], "dueDate": a["due_date"], "opportunityNote": a["opportunity_note"]}
 
 
-def to_lead(c, rank: int, final_score: float, reasons: list[dict], account: dict) -> dict:
+def to_lead(c, rank: int, final_score: float, reasons: list[dict], account: dict, people: list[dict]) -> dict:
     gaf = loads(c["gaf_facts"], {})
     web = loads(c["website_facts"], {})
     fit = product_fit(c)
-    people = web.get("decision_makers") or []
     person = people[0] if people else None
     evidence = [{"fact": cert, "source": "GAF profile", "url": c["gaf_profile_url"]}
                 for cert in loads(c["certifications"], [])]
@@ -99,10 +117,10 @@ def to_lead(c, rank: int, final_score: float, reasons: list[dict], account: dict
         "evidence": evidence,
         "productFit": [{k: p[k] for k in ("category", "level", "reason", "question")} for p in web.get("product_fit", [])],
         "contact": {
-            "person": person and {"name": person["name"], "role": person["role"], "verified": False,
-                                  "source": "Web research" if sources else "Company website"},
-            "phone": c["phone"] or next(iter(web.get("phones", [])), None),
-            "email": next((e for e in web.get("emails", []) if EMAIL.match(e)), None),
+            "person": person and {"name": person["name"], "role": person["role"] or "", "verified": False,
+                                  "source": person["source"]},
+            "phone": c["phone"] or (person and person["phone"]) or next(iter(web.get("phones", [])), None),
+            "email": (person and person["email"]) or next((e for e in web.get("emails", []) if EMAIL.match(e)), None),
             "website": c["website"],
         },
         "opener": web.get("opener"),
@@ -135,7 +153,8 @@ def get_leads(uid: int = Depends(user_id), conn=Depends(get_conn)):
             rank, final_score, reasons = item["position"], item["final_score"], loads(item["final_reasons"])
         else:
             rank, (final_score, reasons) = len(leads) + 1, score(c, rep)
-        leads.append(to_lead(c, rank, final_score, reasons, accounts.get_account(conn, cid, uid)))
+        leads.append(to_lead(c, rank, final_score, reasons, accounts.get_account(conn, cid, uid),
+                             accounts.contacts(conn, cid)))
 
     return {
         "updatedAt": queue["published_at"] if queue else now(),
@@ -194,11 +213,17 @@ def get_account(contractor_id: str, uid: int = Depends(user_id), conn=Depends(ge
            FROM activities a
            JOIN users u ON u.id = a.user_id WHERE a.contractor_id = ? ORDER BY a.created_at DESC, a.id DESC""",
         (contractor_id,)).fetchall()
+    people = {}
+    for r in conn.execute(
+            """SELECT ac.activity_id, c.id, c.name, c.role FROM activity_contacts ac JOIN contacts c ON c.id = ac.contact_id
+               WHERE c.contractor_id = ?""", (contractor_id,)):
+        people.setdefault(r["activity_id"], []).append({"id": r["id"], "name": r["name"], "role": r["role"]})
     return {
         "account": account_json(accounts.get_account(conn, contractor_id, uid)),
+        "contacts": accounts.contacts(conn, contractor_id),
         "interactions": [{"id": r["id"], "at": r["created_at"], "user": r["user"], "mode": r["mode"],
                           "outcome": r["outcome"], "note": r["note"], "nextAction": r["next_action"],
-                          "dueDate": r["due_date"]} for r in log],
+                          "dueDate": r["due_date"], "people": people.get(r["id"], [])} for r in log],
     }
 
 
@@ -210,13 +235,20 @@ def require_worked(conn, uid: int, contractor_id: str) -> None:
 
 @app.post("/accounts/{contractor_id}/interactions", status_code=204)
 def post_interaction(contractor_id: str, body: InteractionIn, uid: int = Depends(user_id), conn=Depends(get_conn)):
-    require_worked(conn, uid, contractor_id)
+    """Logs a call, email, text or meeting. Logging a Recommended lead starts working it (moves it to My Focus)."""
+    require_contractor(conn, contractor_id)
+    known = {c["id"] for c in accounts.contacts(conn, contractor_id)}
+    if not set(body.contactIds) <= known:
+        raise HTTPException(422, "Unknown contact for this contractor")
     with conn:
+        if board_stage(conn, uid, contractor_id) in ("recommended", "dismissed"):
+            upsert_state(conn, uid, contractor_id, "focus")
+            accounts.set_stage(conn, contractor_id, uid, "researching")
         accounts.set_stage(conn, contractor_id, uid, "contacted", last_outcome=body.outcome,
                            next_action=body.nextAction, due_date=body.dueDate)
         account = accounts.get_account(conn, contractor_id, uid)
         accounts.log(conn, contractor_id, uid, body.mode, body.outcome, body.note,
-                     account["next_action"], account["due_date"])
+                     account["next_action"], account["due_date"], body.contactIds)
         if body.outcome == "Not relevant":
             upsert_state(conn, uid, contractor_id, "dismissed")
     return Response(status_code=204)
@@ -230,6 +262,31 @@ def post_opportunity(contractor_id: str, body: OpportunityIn, uid: int = Depends
         accounts.set_stage(conn, contractor_id, uid, "opportunity", note=body.note)
         upsert_state(conn, uid, contractor_id, "done")
     return Response(status_code=204)
+
+
+@app.post("/accounts/{contractor_id}/contacts", status_code=201)
+def post_contact(contractor_id: str, body: ContactIn, uid: int = Depends(user_id), conn=Depends(get_conn)):
+    require_contractor(conn, contractor_id)
+    with conn:
+        try:
+            contact_id = conn.execute(
+                """INSERT INTO contacts (contractor_id, name, role, phone, email, source, created_by, created_at)
+                   VALUES (?, ?, ?, ?, ?, 'Added by rep', ?, ?)""",
+                (contractor_id, body.name.strip(), body.role, body.phone, body.email, uid, now())).lastrowid
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, f"{body.name} is already listed for this contractor")
+    return next(c for c in accounts.contacts(conn, contractor_id) if c["id"] == contact_id)
+
+
+@app.put("/accounts/{contractor_id}/contacts/{contact_id}")
+def put_contact(contractor_id: str, contact_id: int, body: ContactIn, uid: int = Depends(user_id), conn=Depends(get_conn)):
+    with conn:
+        updated = conn.execute(
+            "UPDATE contacts SET name = ?, role = ?, phone = ?, email = ? WHERE id = ? AND contractor_id = ?",
+            (body.name.strip(), body.role, body.phone, body.email, contact_id, contractor_id)).rowcount
+    if not updated:
+        raise HTTPException(404, "Contact not found")
+    return next(c for c in accounts.contacts(conn, contractor_id) if c["id"] == contact_id)
 
 
 @app.put("/accounts/{contractor_id}/next-action", status_code=204)
@@ -308,3 +365,47 @@ def put_territory(body: TerritoryIn, tasks: BackgroundTasks, uid: int = Depends(
         refresh_status[uid] = "running"
         tasks.add_task(refresh_in_background, uid)
     return {"refresh": "running"}
+
+
+def assistant_context(conn, uid: int, contractor_id: str | None) -> str:
+    me = get_me(uid, conn)
+    lines = [f"Rep: {me['profile']['name']}. {me['summary']}", f"Today: {now()[:10]}"]
+    if contractor_id:
+        c = conn.execute("SELECT * FROM contractors WHERE id = ?", (contractor_id,)).fetchone()
+        if not c:
+            raise HTTPException(404, "Contractor not found")
+        a = accounts.get_account(conn, contractor_id, uid)
+        log = conn.execute(
+            """SELECT a.created_at, u.name, a.mode, a.outcome, a.note FROM activities a JOIN users u ON u.id = a.user_id
+               WHERE a.contractor_id = ? ORDER BY a.id DESC LIMIT 20""", (contractor_id,)).fetchall()
+        lines += [
+            f"Open account: {c['name']}, {c['city']}, {c['state']}. Stage {a['stage']}, owner {a['owner_name']}, "
+            f"next action '{a['next_action']}' due {a['due_date']}.",
+            "People: " + ("; ".join(f"{p['name']} ({p['role'] or 'role unknown'})" for p in accounts.contacts(conn, contractor_id)) or "none"),
+            f"GAF facts: {c['gaf_facts']}", f"Website facts: {c['website_facts']}",
+            "Interaction log (newest first): " + ("; ".join(
+                f"{r['created_at'][:16]} {r['name']} {r['mode']}: {r['outcome']} {r['note']}" for r in log) or "none"),
+        ]
+    else:
+        board = conn.execute(
+            """SELECT c.name, s.stage, a.stage AS account_stage, a.next_action, a.due_date FROM lead_states s
+               JOIN contractors c ON c.id = s.contractor_id LEFT JOIN accounts a ON a.contractor_id = c.id
+               WHERE s.user_id = ? AND s.stage IN ('focus', 'done')""", (uid,)).fetchall()
+        queue = conn.execute(
+            """SELECT c.name, i.position, i.final_reasons FROM daily_queue_items i JOIN daily_queues q ON q.id = i.daily_queue_id
+               JOIN contractors c ON c.id = i.contractor_id WHERE q.user_id = ? AND q.status = 'published'
+                 AND q.queue_date = (SELECT MAX(queue_date) FROM daily_queues WHERE user_id = ? AND status = 'published')
+               ORDER BY i.position""", (uid, uid)).fetchall()
+        lines += ["Board: " + "; ".join(f"{r['name']} ({r['stage']}, {r['account_stage']}, next: {r['next_action']} "
+                                        f"due {r['due_date']})" for r in board),
+                  "Today's ranked recommendations: " + "; ".join(
+                      f"#{r['position']} {r['name']}: {reason_sentence(loads(r['final_reasons']))}" for r in queue)]
+    return "\n".join(lines)
+
+
+@app.post("/assistant")
+def post_assistant(body: AssistantIn, uid: int = Depends(user_id), conn=Depends(get_conn)):
+    context = assistant_context(conn, uid, body.contractorId)
+    with conn:
+        reply = llm.chat(conn, context, [m.model_dump() for m in body.messages], body.contractorId)
+    return {"reply": reply}

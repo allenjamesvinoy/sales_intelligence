@@ -11,11 +11,11 @@ CATEGORIES = ["Residential shingles", "Underlayment", "Ventilation", "Leak barri
 
 
 def seed(conn) -> None:
-    """Demo profile from the design: Alex, residential rep at the Manhattan branch."""
+    """Demo profiles: Allen and Jamie, residential reps at the Manhattan branch."""
     conn.executemany("INSERT OR IGNORE INTO product_categories (id, name) VALUES (?, ?)", enumerate(CATEGORIES, 1))
     conn.execute("INSERT OR IGNORE INTO branches (id, name) VALUES (1, 'Manhattan')")
     conn.execute("""INSERT OR IGNORE INTO users (id, name, email, role, branch_id, timezone)
-                    VALUES (1, 'Alex Rivera', 'alex@example.com', 'Residential sales representative', 1, 'America/New_York')""")
+                    VALUES (1, 'Allen Vinoy', 'allen@example.com', 'Residential sales representative', 1, 'America/New_York')""")
     conn.execute("""INSERT OR IGNORE INTO users (id, name, email, role, manager_id, branch_id, timezone)
                     VALUES (2, 'Jamie Chen', 'jamie@example.com', 'Residential sales representative', NULL, 1, 'America/New_York')""")
     conn.execute("""INSERT OR IGNORE INTO user_scopes VALUES (1, 'residential', 'ZIP', '10013', 25)""")

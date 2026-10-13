@@ -1,6 +1,7 @@
 import { Button, Notice } from './components';
 import { api } from './api';
-import { h } from './dom';
+import { mountAssistant } from './assistant';
+import { h, icon } from './dom';
 import { getTheme, hydrate, setTheme, subscribe } from './store';
 import type { Lead } from './types';
 import { renderBoard } from './views/board';
@@ -24,19 +25,21 @@ function parseRoute(): Route {
 
 function themeToggle(): HTMLElement {
   const dark = getTheme() === 'dark';
-  const button = Button(
+  const label = dark ? 'Switch to light theme' : 'Switch to dark theme';
+  return h(
+    'button',
     {
-      variant: 'quiet',
-      size: 'sm',
+      type: 'button',
+      className: 'icon-btn',
+      'aria-label': label,
+      title: label,
       onClick: () => {
         setTheme(dark ? 'light' : 'dark');
         render();
       },
     },
-    dark ? 'Light' : 'Dark',
+    icon(dark ? 'sun' : 'moon'),
   );
-  button.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
-  return button;
 }
 
 function render(focusHeading = false): void {
@@ -60,8 +63,8 @@ function render(focusHeading = false): void {
     h(
       'header',
       { className: 'app-header' },
-      h('a', { className: 'app-name', href: '#/' }, 'InstaHermes'),
-      h('nav', { className: 'app-nav' }, h('a', { className: 'app-nav-link', href: '#/profile' }, 'Profile'), themeToggle()),
+      h('a', { className: 'app-name', href: '#/' }, 'InstaHermes.AI'),
+      h('nav', { className: 'app-nav' }, h('a', { className: 'icon-btn', href: '#/profile', 'aria-label': 'Profile', title: 'Profile' }, icon('user')), themeToggle()),
     ),
     h('main', { id: 'main', className: 'app-main', tabindex: '-1' }, view),
   );
@@ -101,4 +104,5 @@ window.addEventListener('app:render', () => render());
 window.addEventListener('leads:changed', () => load(true));
 subscribe(() => render());
 
+mountAssistant();
 load();

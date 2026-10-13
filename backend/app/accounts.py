@@ -21,13 +21,26 @@ def get_account(conn, contractor_id: str, user_id: int) -> dict:
             "due_date": (date.today() + timedelta(days=days)).isoformat(), "opportunity_note": None}
 
 
-def next_best_action(conn, contractor_id: str, stage: str, last_outcome: str | None) -> tuple[str, int]:
-    """Suggested next step and how many days until it is due."""
+def sync_contacts(conn, contractor_id: str) -> None:
+    """Adds decision-makers found by extraction or research to the shared contact list."""
     facts = loads(conn.execute("SELECT website_facts FROM contractors WHERE id = ?",
                                (contractor_id,)).fetchone()["website_facts"], {})
-    person = (facts.get("decision_makers") or [None])[0]
+    source = "Web research" if facts.get("sources") else "Company website"
+    conn.executemany(
+        "INSERT OR IGNORE INTO contacts (contractor_id, name, role, source, created_at) VALUES (?, ?, ?, ?, ?)",
+        [(contractor_id, p["name"], p["role"], source, now()) for p in facts.get("decision_makers", [])])
+
+
+def contacts(conn, contractor_id: str) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        "SELECT id, name, role, phone, email, source FROM contacts WHERE contractor_id = ? ORDER BY id", (contractor_id,))]
+
+
+def next_best_action(conn, contractor_id: str, stage: str, last_outcome: str | None) -> tuple[str, int]:
+    """Suggested next step and how many days until it is due."""
+    person = next(iter(contacts(conn, contractor_id)), None)
     if stage in ("discovered", "researching"):
-        return (f"Call {person['name']} ({person['role']})" if person
+        return (f"Call {person['name']}" + (f" ({person['role']})" if person["role"] else "") if person
                 else "Call the main line and ask for the owner or purchasing"), 0 if stage == "discovered" else 1
     if stage == "contacted":
         return {
@@ -41,11 +54,12 @@ def next_best_action(conn, contractor_id: str, stage: str, last_outcome: str | N
 
 
 def log(conn, contractor_id: str, user_id: int, mode: str, outcome: str, note: str = "",
-        next_action: str | None = None, due_date: str | None = None) -> None:
-    conn.execute(
+        next_action: str | None = None, due_date: str | None = None, contact_ids: list[int] = ()) -> None:
+    activity_id = conn.execute(
         """INSERT INTO activities (user_id, contractor_id, mode, outcome, note, next_action, due_date, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (user_id, contractor_id, mode, outcome, note, next_action, due_date, now()))
+        (user_id, contractor_id, mode, outcome, note, next_action, due_date, now())).lastrowid
+    conn.executemany("INSERT INTO activity_contacts VALUES (?, ?)", [(activity_id, c) for c in contact_ids])
 
 
 def set_stage(conn, contractor_id: str, user_id: int, stage: str, *, last_outcome: str | None = None,

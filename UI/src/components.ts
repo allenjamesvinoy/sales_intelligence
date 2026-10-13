@@ -12,6 +12,8 @@ import {
   type FitLevel,
   type InteractionInput,
   type InteractionMode,
+  type Person,
+  type PersonInput,
   type Priority,
   type Stage,
 } from './types';
@@ -229,60 +231,6 @@ export function LoadingCards(count = 2): HTMLElement {
   );
 }
 
-export interface ContactBlockProps extends Contact {
-  opener?: string;
-  questions?: string[];
-}
-
-export function ContactBlock(p: ContactBlockProps): HTMLElement {
-  const person = p.person;
-  const lines: Child[] = [];
-  if (p.phone) lines.push(icon('phone'), h('a', { className: 'lb-link', href: `tel:${p.phone}` }, p.phone));
-  if (p.email) lines.push(icon('mail'), h('a', { className: 'lb-link', href: `mailto:${p.email}` }, p.email));
-  if (p.website) {
-    lines.push(
-      icon('globe'),
-      h('a', { className: 'lb-link', href: p.website, target: '_blank', rel: 'noopener' }, p.website.replace(/^https?:\/\//, '')),
-    );
-  }
-
-  return h(
-    'div',
-    { className: 'lb-contact' },
-    person
-      ? h(
-          'div',
-          { className: 'lb-contact-person' },
-          h(
-            'span',
-            { className: 'lb-contact-name' },
-            icon('user'),
-            person.name,
-            person.verified && h('span', { className: 'lb-verified' }, icon('check'), 'Verified'),
-          ),
-          h('span', { className: 'lb-muted' }, person.role + (person.source ? ` · source: ${person.source}` : '')),
-        )
-      : Notice({
-          tone: 'gap',
-          title: 'Purchasing contact not identified',
-          body: `Ask for the ${p.askFor ?? 'owner or the person who orders materials'}.`,
-        }),
-    lines.length > 0
-      ? h('div', { className: 'lb-contact-lines' }, lines)
-      : Notice({ tone: 'gap', title: 'No phone, email or website found' }),
-    (p.opener || p.questions?.length) &&
-      h(
-        'div',
-        { className: 'lb-prep' },
-        p.opener && [h('p', { className: 'lb-label' }, 'Opener'), h('p', { className: 'lb-opener' }, p.opener)],
-        p.questions?.length && [
-          h('p', { className: 'lb-label' }, 'Qualify'),
-          h('ol', null, p.questions.map((q) => h('li', null, q))),
-        ],
-      ),
-  );
-}
-
 export function EvidenceList(items: EvidenceItem[]): HTMLElement {
   return h(
     'ul',
@@ -350,29 +298,85 @@ function ChipGroup<T extends string>(label: string, options: readonly T[], text:
   return { el, value: () => value };
 }
 
-const MODE_LABEL: Record<InteractionMode, string> = { call: 'Call', email: 'Email', text: 'Text', visit: 'Visit' };
+export const MODE_LABEL: Record<InteractionMode, string> = { call: 'Call', email: 'Email', meeting: 'Meeting', text: 'Text' };
+const NOTE_LABEL: Record<InteractionMode, [string, string]> = {
+  call: ['Call notes', 'What did you learn?'],
+  email: ['Email content', 'Paste the email you sent or received'],
+  meeting: ['Meeting notes', 'Who was there, what was discussed, what was agreed'],
+  text: ['Message', 'Paste the text thread'],
+};
 
-/** Log a call, email, text or visit, and set what happens next. */
-export function InteractionForm(onSave: (input: InteractionInput) => Promise<void>): HTMLElement {
+/** A modal dialog that removes itself when closed. */
+export function openDialog(title: string, ...children: Child[]): HTMLDialogElement {
+  const close = Button({ size: 'sm', variant: 'quiet', onClick: () => dialog.close() }, 'Close');
+  const dialog = h(
+    'dialog',
+    { className: 'app-dialog', 'aria-label': title },
+    h('div', { className: 'dialog-head' }, h('h2', { className: 'section-title' }, title), close),
+    ...children,
+  );
+  dialog.addEventListener('close', () => dialog.remove());
+  dialog.addEventListener('click', (e) => e.target === dialog && dialog.close());
+  document.body.append(dialog);
+  dialog.showModal();
+  return dialog;
+}
+
+export interface InteractionFormProps {
+  people: Person[];
+  /** Opens the add-person form; resolves with the new person, or null if cancelled. */
+  addPerson: () => Promise<Person | null>;
+  onSave: (input: InteractionInput) => Promise<void>;
+}
+
+/** Log a call, email, meeting or text: who was involved, what happened, and what happens next. */
+export function InteractionForm({ people, addPerson, onSave }: InteractionFormProps): HTMLElement {
   const uid = `interaction-${++formCount}`;
   const save = Button({ variant: 'primary', type: 'submit', disabled: true }, 'Log interaction');
   const error = h('p', { className: 'lb-field-error', role: 'alert' });
+  const noteLabel = h('span', { className: 'lb-label' });
+  const note = h('textarea', { className: 'lb-input', id: `${uid}-note`, rows: '4' });
   const sync = () => {
     save.disabled = !mode.value() || !outcome.value();
     error.textContent = '';
+    const [label, hint] = NOTE_LABEL[mode.value() ?? 'call'];
+    noteLabel.textContent = label;
+    note.placeholder = hint;
   };
   const mode = ChipGroup('How', MODES, (m) => MODE_LABEL[m], sync);
   const outcome = ChipGroup('Outcome', OUTCOMES, (o) => o, sync);
-  const note = h('textarea', { className: 'lb-input', id: `${uid}-note`, placeholder: 'What did you learn?' });
   const next = h('input', { className: 'lb-input', id: `${uid}-next`, placeholder: 'Leave blank for the suggested step' });
   const due = h('input', { className: 'lb-input', type: 'date', id: `${uid}-due`, min: todayIso() });
+
+  const selected = new Set<number>();
+  const personChip = (p: Person) => {
+    const chip = h('button', { type: 'button', role: 'checkbox', 'aria-checked': 'false', className: 'lb-chip' }, p.name, p.role && h('span', { className: 'lb-muted' }, ` · ${p.role}`));
+    chip.addEventListener('click', () => {
+      const on = !selected.has(p.id);
+      if (on) selected.add(p.id);
+      else selected.delete(p.id);
+      chip.setAttribute('aria-checked', String(on));
+    });
+    return chip;
+  };
+  const chips = h('div', { className: 'lb-chips', role: 'group', 'aria-labelledby': `${uid}-people` }, people.map(personChip));
+  const add = Button({ size: 'sm', variant: 'quiet' }, icon('plus'), 'Add person');
+  add.addEventListener('click', async () => {
+    const person = await addPerson();
+    if (!person) return;
+    const chip = personChip(person);
+    chips.insertBefore(chip, add);
+    chip.click();
+  });
+  chips.append(add);
 
   const form = h(
     'form',
     { className: 'lb-outcome', novalidate: true },
     mode.el,
+    h('div', { className: 'lb-field' }, h('span', { className: 'lb-label', id: `${uid}-people` }, 'Talked to'), chips),
     outcome.el,
-    h('label', { className: 'lb-field', for: `${uid}-note` }, h('span', { className: 'lb-label' }, 'Note'), note),
+    h('label', { className: 'lb-field', for: `${uid}-note` }, noteLabel, note),
     h(
       'div',
       { className: 'lb-followup' },
@@ -393,7 +397,52 @@ export function InteractionForm(onSave: (input: InteractionInput) => Promise<voi
       return;
     }
     save.disabled = true;
-    await onSave({ mode: m, outcome: o, note: note.value.trim(), nextAction: next.value.trim() || undefined, dueDate: due.value || undefined });
+    await onSave({
+      mode: m,
+      outcome: o,
+      note: note.value.trim(),
+      contactIds: [...selected],
+      nextAction: next.value.trim() || undefined,
+      dueDate: due.value || undefined,
+    });
   });
+  sync();
   return form;
+}
+
+/** Add or edit someone at the contractor. Resolves with the saved person, or null if cancelled. */
+export function PersonDialog(save: (input: PersonInput) => Promise<Person>, person?: Person): Promise<Person | null> {
+  return new Promise((resolve) => {
+    let saved: Person | null = null;
+    const field = (label: string, input: HTMLInputElement) => h('label', { className: 'lb-field' }, h('span', { className: 'lb-label' }, label), input);
+    const name = h('input', { className: 'lb-input', required: true, value: person?.name ?? '', autocomplete: 'off' });
+    const role = h('input', { className: 'lb-input', value: person?.role ?? '', placeholder: 'e.g. Owner, Purchasing, Estimator' });
+    const phone = h('input', { className: 'lb-input', type: 'tel', value: person?.phone ?? '' });
+    const email = h('input', { className: 'lb-input', type: 'email', value: person?.email ?? '' });
+    const error = h('p', { className: 'lb-field-error', role: 'alert' });
+    const form = h(
+      'form',
+      { className: 'lb-outcome', novalidate: true },
+      field('Name', name),
+      field('Role', role),
+      field('Phone', phone),
+      field('Email', email),
+      Button({ variant: 'primary', type: 'submit' }, person ? 'Save' : 'Add person'),
+      error,
+    );
+    const dialog = openDialog(person ? `Edit ${person.name}` : 'Add a person', form);
+    dialog.addEventListener('close', () => resolve(saved));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!name.value.trim()) return void name.focus();
+      if (email.value && !email.checkValidity()) return void (error.textContent = 'Check the email address.');
+      try {
+        saved = await save({ name: name.value.trim(), role: role.value.trim() || null, phone: phone.value.trim() || null, email: email.value.trim() || null });
+        dialog.close();
+      } catch {
+        error.textContent = 'Could not save. Is this person already listed?';
+      }
+    });
+    queueMicrotask(() => name.focus());
+  });
 }

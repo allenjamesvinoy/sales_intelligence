@@ -1,19 +1,21 @@
 import { api } from '../api';
 import {
   Button,
-  ContactBlock,
   EmptyState,
   EvidenceList,
   FitTag,
   InteractionForm,
+  MODE_LABEL as INTERACTION_MODES,
   NextAction,
   Notice,
+  PersonDialog,
   PriorityBadge,
+  openDialog,
 } from '../components';
 import { append, cx, h, icon, type Child } from '../dom';
 import { formatDay, formatDistance, formatStamp, todayIso } from '../format';
 import { getLeadState, setStage, sync } from '../store';
-import { ACCOUNT_STAGES, type Account, type AccountDetail, type AccountStage, type Interaction, type Lead, type Overview, type Stage } from '../types';
+import { ACCOUNT_STAGES, type Account, type AccountDetail, type AccountStage, type Interaction, type Lead, type Overview, type Person, type Stage } from '../types';
 
 const STAGE_LABEL: Record<AccountStage, string> = {
   discovered: 'Discovered',
@@ -22,7 +24,7 @@ const STAGE_LABEL: Record<AccountStage, string> = {
   opportunity: 'Opportunity',
   customer: 'Customer',
 };
-const MODE_LABEL: Record<Interaction['mode'], string> = { call: 'Call', email: 'Email', text: 'Text', visit: 'Visit', update: 'Update' };
+const MODE_LABEL: Record<Interaction['mode'], string> = { ...INTERACTION_MODES, update: 'Update' };
 
 export function renderDetail(lead: Lead | undefined): HTMLElement {
   if (!lead) {
@@ -41,6 +43,8 @@ export function renderDetail(lead: Lead | undefined): HTMLElement {
   const status = h('section', { className: 'section account-status' }, h('p', { className: 'lb-muted' }, 'Loading account…'));
   const chat = h('section', { className: 'section chat', 'aria-label': 'Account conversation' });
   const list = h('section', { className: 'section', 'aria-labelledby': 'log-title' }, h('h2', { className: 'section-title', id: 'log-title' }, 'Interactions'));
+  const people = details('People', true);
+  const logButton = Button({ variant: 'primary', disabled: true }, icon('plus'), 'Log interaction');
   api
     .getAccount(lead.id)
     .then((detail) => {
@@ -48,6 +52,9 @@ export function renderDetail(lead: Lead | undefined): HTMLElement {
       append(status, accountStatus(lead, detail));
       append(chat, chatPanel(lead, board, detail));
       append(list, [interactionList(detail.interactions)]);
+      append(people, peopleList(lead.id, detail.contacts));
+      logButton.disabled = false;
+      logButton.addEventListener('click', () => openLog(lead, detail.contacts));
     })
     .catch(() => status.replaceChildren(Notice({ tone: 'error', title: 'Account could not load' })));
 
@@ -66,7 +73,7 @@ export function renderDetail(lead: Lead | undefined): HTMLElement {
         h('span', null, lead.location),
         lead.distanceMi != null && h('span', { className: 'lb-data' }, `· ${formatDistance(lead.distanceMi)}`),
       ),
-      stageActions(lead.id, board),
+      h('div', { className: 'detail-actions' }, logButton, stageAction(lead.id, board)),
     ),
     status,
     h(
@@ -76,7 +83,8 @@ export function renderDetail(lead: Lead | undefined): HTMLElement {
         'div',
         { className: 'account-main' },
         chat,
-        details('Contact and call preparation', true, ContactBlock({ ...lead.contact, opener: lead.opener, questions: lead.questions })),
+        people,
+        details('Call preparation', false, callPrep(lead)),
         details(
           'Why this lead',
           false,
@@ -149,19 +157,12 @@ function chatPanel(lead: Lead, board: Stage, { account, interactions: log }: Acc
   const canConvert = board !== 'recommended' && (account.stage === 'researching' || account.stage === 'contacted');
   return [
     h('div', { className: 'chat-thread' }, bubble(summary(lead, account, log))),
-    h(
-      'div',
-      { className: 'chat-composer' },
-      board === 'recommended'
-        ? Button({ onClick: () => setStage(lead.id, 'focus') }, 'Move to My Focus to start working this account')
-        : InteractionForm((input) => sync(api.logInteraction(lead.id, input))),
-      canConvert && opportunityForm(lead.id),
-    ),
+    canConvert && h('div', { className: 'chat-composer' }, opportunityForm(lead.id)),
   ];
 }
 
 function bubble(...children: Child[]): HTMLElement {
-  return h('div', { className: 'chat-bubble' }, h('span', { className: 'chat-from' }, 'InstaHermes'), h('p', null, ...children));
+  return h('div', { className: 'chat-bubble' }, h('span', { className: 'chat-from' }, 'InstaHermes.AI'), h('p', null, ...children));
 }
 
 /** Plain-language recap of the log, built from the records (no AI call). */
@@ -191,6 +192,7 @@ function interactionList(log: Interaction[]): Child {
           'button',
           { type: 'button', className: cx('interaction-row', i.mode === 'update' && 'is-update'), onClick: () => openInteraction(i) },
           h('span', { className: 'interaction-top' }, h('b', null, i.outcome), h('span', { className: 'lb-cat' }, MODE_LABEL[i.mode])),
+          i.people.length > 0 && h('span', null, 'with ', i.people.map((p) => p.name).join(', ')),
           h('span', { className: 'lb-muted' }, i.user, ' · ', h('span', { className: 'lb-data' }, formatStamp(i.at))),
         ),
       ),
@@ -199,28 +201,80 @@ function interactionList(log: Interaction[]): Child {
 }
 
 function openInteraction(i: Interaction): void {
-  const close = Button({ size: 'sm', variant: 'quiet', onClick: () => dialog.close() }, 'Close');
-  const dialog = h(
-    'dialog',
-    { className: 'interaction-dialog', 'aria-labelledby': 'dialog-title' },
-    h('div', { className: 'dialog-head' }, h('h2', { className: 'section-title', id: 'dialog-title' }, i.outcome), close),
+  openDialog(
+    `${MODE_LABEL[i.mode]}: ${i.outcome}`,
     h(
       'dl',
       { className: 'facts' },
-      h('dt', null, 'How'),
-      h('dd', null, MODE_LABEL[i.mode]),
       h('dt', null, 'By'),
       h('dd', null, i.user),
       h('dt', null, 'When'),
       h('dd', null, h('span', { className: 'lb-data' }, formatStamp(i.at))),
-      i.note && [h('dt', null, 'Note'), h('dd', null, i.note)],
+      i.people.length > 0 && [h('dt', null, 'Talked to'), h('dd', null, i.people.map((p) => (p.role ? `${p.name} (${p.role})` : p.name)).join(', '))],
+      i.note && [h('dt', null, 'Notes'), h('dd', { className: 'pre-wrap' }, i.note)],
       i.nextAction && [h('dt', null, 'Next step set'), h('dd', null, i.nextAction, i.dueDate ? `, due ${formatDay(i.dueDate)}` : '')],
     ),
   );
-  dialog.addEventListener('close', () => dialog.remove());
-  dialog.addEventListener('click', (e) => e.target === dialog && dialog.close());
-  document.body.append(dialog);
-  dialog.showModal();
+}
+
+function openLog(lead: Lead, contacts: Person[]): void {
+  const dialog = openDialog(
+    `Log interaction with ${lead.name}`,
+    InteractionForm({
+      people: contacts,
+      addPerson: () => PersonDialog((input) => api.addContact(lead.id, input)),
+      onSave: async (input) => {
+        await sync(api.logInteraction(lead.id, input));
+        dialog.close();
+      },
+    }),
+  );
+}
+
+/** Everyone known at the contractor, editable by any rep. */
+function peopleList(id: string, contacts: Person[]): Child[] {
+  const changed = () => window.dispatchEvent(new Event('leads:changed'));
+  const add = Button({ size: 'sm', onClick: async () => (await PersonDialog((input) => api.addContact(id, input))) && changed() }, icon('plus'), 'Add person');
+  if (contacts.length === 0) return [h('p', { className: 'lb-muted' }, 'No one identified yet.'), add];
+  return [
+    h(
+      'ul',
+      { className: 'people' },
+      contacts.map((p) =>
+        h(
+          'li',
+          null,
+          h(
+            'div',
+            { className: 'people-main' },
+            h('b', null, p.name),
+            p.role && h('span', { className: 'lb-muted' }, p.role),
+            p.phone && h('a', { className: 'lb-link', href: `tel:${p.phone}` }, p.phone),
+            p.email && h('a', { className: 'lb-link', href: `mailto:${p.email}` }, p.email),
+            h('span', { className: 'lb-help' }, p.source),
+          ),
+          Button({ size: 'sm', variant: 'quiet', onClick: async () => (await PersonDialog((input) => api.updateContact(id, p.id, input), p)) && changed() }, 'Edit'),
+        ),
+      ),
+    ),
+    add,
+  ];
+}
+
+/** Company lines and talking points for the next call. */
+function callPrep(lead: Lead): Child[] {
+  const { phone, email, website } = lead.contact;
+  return [
+    h(
+      'div',
+      { className: 'lb-contact-lines' },
+      phone && [icon('phone'), h('a', { className: 'lb-link', href: `tel:${phone}` }, phone)],
+      email && [icon('mail'), h('a', { className: 'lb-link', href: `mailto:${email}` }, email)],
+      website && [icon('globe'), h('a', { className: 'lb-link', href: website, target: '_blank', rel: 'noopener' }, website.replace(/^https?:\/\//, ''))],
+    ),
+    lead.opener && [h('p', { className: 'lb-label' }, 'Opener'), h('p', null, lead.opener)],
+    lead.questions.length > 0 && [h('p', { className: 'lb-label' }, 'Qualify'), h('ol', { className: 'prep-questions' }, lead.questions.map((q) => h('li', null, q)))],
+  ];
 }
 
 /** Users who have touched this account, with how many interactions each. */
@@ -258,12 +312,10 @@ function backLink(): HTMLElement {
   return h('a', { className: 'back-link', href: '#/' }, icon('back'), 'My leads');
 }
 
-function stageActions(id: string, stage: Stage): HTMLElement {
-  const button =
-    stage === 'dismissed'
-      ? Button({ size: 'sm', onClick: () => setStage(id, 'recommended') }, 'Restore')
-      : Button({ size: 'sm', variant: 'quiet', onClick: () => setStage(id, 'dismissed') }, 'Not relevant');
-  return h('div', { className: 'detail-actions' }, button);
+function stageAction(id: string, stage: Stage): HTMLElement {
+  return stage === 'dismissed'
+    ? Button({ size: 'sm', onClick: () => setStage(id, 'recommended') }, 'Restore')
+    : Button({ size: 'sm', variant: 'quiet', onClick: () => setStage(id, 'dismissed') }, 'Not relevant');
 }
 
 const OVERVIEW_FIELDS: { key: keyof Overview; label: string }[] = [

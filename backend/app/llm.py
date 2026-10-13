@@ -138,3 +138,23 @@ def research_instructions(categories: list[str]) -> str:
         "You research one roofing contractor on the web") + """
 website: the contractor's own official website, or null if you cannot confirm it.
 Use only facts stated in the sources you cite; quote them in `evidence`."""
+
+
+ASSISTANT_INSTRUCTIONS = """You are InstaHermes.AI, an assistant inside a sales tool for roofing-supply reps.
+Answer the rep's question using only the context below. If the context does not say, say you don't know.
+Be brief and practical: short paragraphs or a few bullet lines, plain text, no headings.
+
+Context:
+"""
+
+
+def chat(conn, context: str, messages: list[dict], contractor_id: str | None) -> str:
+    """One assistant turn, recorded in ai_traces like every other model call."""
+    global _client
+    _client = _client or OpenAI()
+    started = time.monotonic()
+    response = _client.responses.create(model=OPENAI_MODEL, instructions=ASSISTANT_INSTRUCTIONS + context, input=messages)
+    usage = response.usage
+    record_trace(conn, "assistant", OPENAI_MODEL, contractor_id, None, context + str(messages), response.output_text,
+                 usage.input_tokens if usage else None, usage.output_tokens if usage else None, started)
+    return response.output_text

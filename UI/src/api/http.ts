@@ -1,4 +1,4 @@
-import type { AccountDetail, LeadsResponse, Profile } from '../types';
+import type { AccountDetail, LeadsResponse, Person, Profile } from '../types';
 import type { Api } from './index';
 
 export class ApiError extends Error {
@@ -29,8 +29,13 @@ export function httpApi(baseUrl: string): Api {
     getAccount: (id) => request<AccountDetail>(baseUrl, account(id)),
     logInteraction: (id, input) =>
       request(baseUrl, `${account(id)}/interactions`, { method: 'POST', body: JSON.stringify(input) }),
+    addContact: (id, person) => request<Person>(baseUrl, `${account(id)}/contacts`, { method: 'POST', body: JSON.stringify(person) }),
+    updateContact: (id, contactId, person) =>
+      request<Person>(baseUrl, `${account(id)}/contacts/${contactId}`, { method: 'PUT', body: JSON.stringify(person) }),
     convertToOpportunity: (id, note) =>
       request(baseUrl, `${account(id)}/opportunity`, { method: 'POST', body: JSON.stringify({ note }) }),
+    askAssistant: async (messages, contractorId) =>
+      (await request<{ reply: string }>(baseUrl, '/assistant', { method: 'POST', body: JSON.stringify({ messages, contractorId }) })).reply,
     updateNextAction: (id, nextAction, dueDate) =>
       request(baseUrl, `${account(id)}/next-action`, { method: 'PUT', body: JSON.stringify({ nextAction, dueDate }) }),
     getProfile: () => request<Profile>(baseUrl, '/me'),

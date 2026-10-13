@@ -148,12 +148,33 @@ CREATE TABLE IF NOT EXISTS activities (
   user_id INTEGER NOT NULL REFERENCES users(id),
   contractor_id TEXT NOT NULL REFERENCES contractors(id),
   outreach_task_id INTEGER,
-  mode TEXT NOT NULL DEFAULT 'call' CHECK (mode IN ('call', 'email', 'text', 'visit', 'update')),
+  mode TEXT NOT NULL DEFAULT 'call' CHECK (mode IN ('call', 'email', 'text', 'meeting', 'update')),
   outcome TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '',
   next_action TEXT,
   due_date TEXT,
   created_at TEXT NOT NULL
+);
+
+-- People at a contractor, shared by the team: extracted decision-makers plus anyone a rep adds.
+CREATE TABLE IF NOT EXISTS contacts (
+  id INTEGER PRIMARY KEY,
+  contractor_id TEXT NOT NULL REFERENCES contractors(id),
+  name TEXT NOT NULL,
+  role TEXT,
+  phone TEXT,
+  email TEXT,
+  source TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  UNIQUE (contractor_id, name)
+);
+
+-- Who the rep spoke with or met in each interaction.
+CREATE TABLE IF NOT EXISTS activity_contacts (
+  activity_id INTEGER NOT NULL REFERENCES activities(id),
+  contact_id INTEGER NOT NULL REFERENCES contacts(id),
+  PRIMARY KEY (activity_id, contact_id)
 );
 
 -- Immutable morning queues

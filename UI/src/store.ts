@@ -36,7 +36,7 @@ function persist(): void {
 export function sync(request: Promise<void>): Promise<void> {
   return request
     .then(() => void window.dispatchEvent(new Event('leads:changed')))
-    .catch((err: unknown) => console.error('[InstaHermes] Could not save to the backend', err));
+    .catch((err: unknown) => console.error('[InstaHermes.AI] Could not save to the backend', err));
 }
 
 /** Replaces local state with what the backend returned. */

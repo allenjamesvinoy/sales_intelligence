@@ -5,6 +5,7 @@ from . import llm
 from .apify import fetch_pages
 from .config import PROFILE_REFETCH_DAYS
 from .db import days_ago, now
+from .accounts import sync_contacts
 from .perplexity import research
 
 
@@ -116,5 +117,7 @@ def enrich_websites(conn, contractor_ids: set[str]) -> dict[str, tuple[str, int 
 
     for cid in rows.keys() - results.keys():
         results[cid] = research(conn, rows[cid], categories)
+    for cid in rows:
+        sync_contacts(conn, cid)
     conn.commit()
     return results

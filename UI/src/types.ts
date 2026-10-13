@@ -3,12 +3,12 @@ export type FitLevel = 'high' | 'medium' | 'unknown';
 export type Stage = 'recommended' | 'focus' | 'done' | 'dismissed';
 export type Outcome = 'Connected' | 'No response' | 'Follow-up needed' | 'Qualified' | 'Not relevant';
 
-export type InteractionMode = 'call' | 'email' | 'text' | 'visit';
+export type InteractionMode = 'call' | 'email' | 'meeting' | 'text';
 /** The shared sales journey. Customer needs order history, so it is shown as a future state. */
 export type AccountStage = 'discovered' | 'researching' | 'contacted' | 'opportunity' | 'customer';
 
 export const OUTCOMES: readonly Outcome[] = ['Connected', 'No response', 'Follow-up needed', 'Qualified', 'Not relevant'];
-export const MODES: readonly InteractionMode[] = ['call', 'email', 'text', 'visit'];
+export const MODES: readonly InteractionMode[] = ['call', 'email', 'meeting', 'text'];
 export const ACCOUNT_STAGES: readonly AccountStage[] = ['discovered', 'researching', 'contacted', 'opportunity', 'customer'];
 
 export interface ContactPerson {
@@ -94,11 +94,32 @@ export interface Interaction {
   /** The next step set when this interaction was logged. */
   nextAction?: string | null;
   dueDate?: string | null;
+  /** Who the rep spoke with or met. */
+  people: { id: number; name: string; role: string | null }[];
+}
+
+/** Someone at the contractor, shared by the team. */
+export interface Person {
+  id: number;
+  name: string;
+  role: string | null;
+  phone: string | null;
+  email: string | null;
+  /** "Company website", "Web research" or "Added by rep" */
+  source: string;
+}
+
+export type PersonInput = Pick<Person, 'name'> & Partial<Pick<Person, 'role' | 'phone' | 'email'>>;
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
 }
 
 /** GET /accounts/:id */
 export interface AccountDetail {
   account: Account;
+  contacts: Person[];
   interactions: Interaction[];
 }
 
@@ -106,6 +127,7 @@ export interface InteractionInput {
   mode: InteractionMode;
   outcome: Outcome;
   note: string;
+  contactIds: number[];
   /** Blank means "use the suggested next step". */
   nextAction?: string;
   dueDate?: string;

@@ -218,21 +218,21 @@ const LEADS: SampleLead[] = [
   },
 ];
 
-const OWNER = { id: 1, name: 'Alex Rivera' };
+const OWNER = { id: 1, name: 'Allen Vinoy' };
 const details = new Map<string, AccountDetail>();
 
 function detail(id: string): AccountDetail {
   const lead = LEADS.find((l) => l.id === id);
   if (!details.has(id)) {
     const account: Account = { stage: 'discovered', owner: OWNER, nextAction: lead?.nextAction ?? '', dueDate: todayIso(), opportunityNote: null };
-    details.set(id, { account, interactions: [] });
+    details.set(id, { account, contacts: [], interactions: [] });
   }
   return details.get(id)!;
 }
 
 function record(id: string, mode: AccountDetail['interactions'][number]['mode'], outcome: string, note = ''): void {
   const d = detail(id);
-  d.interactions.unshift({ id: Date.now(), at: new Date().toISOString(), user: OWNER.name, mode, outcome, note });
+  d.interactions.unshift({ id: Date.now(), at: new Date().toISOString(), user: OWNER.name, mode, outcome, note, people: [] });
 }
 
 export const mockApi: Api = {
@@ -247,10 +247,20 @@ export const mockApi: Api = {
     record(id, input.mode, input.outcome, input.note);
     Object.assign(detail(id).account, { stage: 'contacted', nextAction: input.nextAction || 'Follow up', dueDate: input.dueDate || todayIso() });
   },
+  addContact: async (id, person) => {
+    const created = { id: Date.now(), role: null, phone: null, email: null, ...person, source: 'Added by rep' };
+    detail(id).contacts.push(created);
+    return created;
+  },
+  updateContact: async (id, contactId, person) => {
+    const found = detail(id).contacts.find((c) => c.id === contactId)!;
+    return Object.assign(found, person);
+  },
   convertToOpportunity: async (id, note) => {
     record(id, 'update', 'Moved to Opportunity', note);
     Object.assign(detail(id).account, { stage: 'opportunity', opportunityNote: note, nextAction: 'Prepare a quote for the confirmed need' });
   },
+  askAssistant: async () => 'The assistant needs the backend. Set VITE_API_URL to connect it.',
   updateNextAction: async (id, nextAction, dueDate) => {
     Object.assign(detail(id).account, { nextAction, dueDate });
   },
@@ -262,7 +272,7 @@ export const mockApi: Api = {
 
 const PROFILE: Profile = {
   refresh: null,
-  profile: { name: 'Alex Rivera', email: 'alex@example.com', role: 'Residential sales representative', team: null, manager: null, branch: 'Manhattan', timezone: 'America/New_York' },
+  profile: { name: 'Allen Vinoy', email: 'allen@example.com', role: 'Residential sales representative', team: null, manager: null, branch: 'Manhattan', timezone: 'America/New_York' },
   territory: { segment: 'residential', postalCode: '10013', radiusMiles: 25 },
   products: [
     { name: 'Residential shingles', focus: 'primary' },
