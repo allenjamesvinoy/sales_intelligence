@@ -91,6 +91,9 @@ export interface Interaction {
   mode: InteractionMode | 'update';
   outcome: string;
   note: string;
+  /** The next step set when this interaction was logged. */
+  nextAction?: string | null;
+  dueDate?: string | null;
 }
 
 /** GET /accounts/:id */

@@ -37,7 +37,8 @@ def init() -> None:
     with transaction() as conn:
         conn.executescript((Path(__file__).parent / "schema.sql").read_text())
         for table, column, ddl in [("lead_states", "sort_order", "REAL"),
-                                   ("activities", "mode", "TEXT NOT NULL DEFAULT 'call'")]:
+                                   ("activities", "mode", "TEXT NOT NULL DEFAULT 'call'"),
+                                   ("activities", "next_action", "TEXT"), ("activities", "due_date", "TEXT")]:
             if column not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 

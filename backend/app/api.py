@@ -190,13 +190,15 @@ def get_account(contractor_id: str, uid: int = Depends(user_id), conn=Depends(ge
     """The shared account and its full interaction log across reps, newest first."""
     require_contractor(conn, contractor_id)
     log = conn.execute(
-        """SELECT a.id, a.created_at, u.name AS user, a.mode, a.outcome, a.note FROM activities a
+        """SELECT a.id, a.created_at, u.name AS user, a.mode, a.outcome, a.note, a.next_action, a.due_date
+           FROM activities a
            JOIN users u ON u.id = a.user_id WHERE a.contractor_id = ? ORDER BY a.created_at DESC, a.id DESC""",
         (contractor_id,)).fetchall()
     return {
         "account": account_json(accounts.get_account(conn, contractor_id, uid)),
         "interactions": [{"id": r["id"], "at": r["created_at"], "user": r["user"], "mode": r["mode"],
-                          "outcome": r["outcome"], "note": r["note"]} for r in log],
+                          "outcome": r["outcome"], "note": r["note"], "nextAction": r["next_action"],
+                          "dueDate": r["due_date"]} for r in log],
     }
 
 
@@ -210,9 +212,11 @@ def require_worked(conn, uid: int, contractor_id: str) -> None:
 def post_interaction(contractor_id: str, body: InteractionIn, uid: int = Depends(user_id), conn=Depends(get_conn)):
     require_worked(conn, uid, contractor_id)
     with conn:
-        accounts.log(conn, contractor_id, uid, body.mode, body.outcome, body.note)
         accounts.set_stage(conn, contractor_id, uid, "contacted", last_outcome=body.outcome,
                            next_action=body.nextAction, due_date=body.dueDate)
+        account = accounts.get_account(conn, contractor_id, uid)
+        accounts.log(conn, contractor_id, uid, body.mode, body.outcome, body.note,
+                     account["next_action"], account["due_date"])
         if body.outcome == "Not relevant":
             upsert_state(conn, uid, contractor_id, "dismissed")
     return Response(status_code=204)

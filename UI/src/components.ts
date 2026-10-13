@@ -78,7 +78,7 @@ export interface LeadCardProps {
 }
 
 export function LeadCard(p: LeadCardProps): HTMLElement {
-  const { stage, contact } = p;
+  const { contact } = p;
   return h(
     'article',
     { className: 'lb-card', 'data-lead': p.id },
@@ -102,7 +102,7 @@ export function LeadCard(p: LeadCardProps): HTMLElement {
         { className: 'lb-cats', 'aria-label': 'Likely product categories' },
         p.categories.slice(0, 3).map((c) => h('span', { className: 'lb-cat' }, c)),
       ),
-    stage !== 'recommended' && p.nextAction && p.dueDate && NextAction(p.nextAction, p.dueDate),
+    p.nextAction && p.dueDate && NextAction(p.nextAction, p.dueDate),
     CardContact(contact),
   );
 }

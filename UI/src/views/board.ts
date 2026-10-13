@@ -127,6 +127,11 @@ function card(lead: Lead, stage: Column): HTMLElement {
     (to, beforeId) => moveTo(lead.id, stage, to as Column, beforeId, false),
   );
 
+  // The whole card opens the account; links inside it (name, phone) keep their own behaviour.
+  el.addEventListener('click', (e) => {
+    if (!(e.target as Element).closest('a, button')) location.hash = `#/lead/${lead.id}`;
+  });
+
   const link = el.querySelector('a');
   link?.setAttribute('aria-describedby', 'board-help');
   link?.setAttribute('aria-keyshortcuts', 'Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown');

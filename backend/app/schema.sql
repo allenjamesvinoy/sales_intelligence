@@ -151,7 +151,8 @@ CREATE TABLE IF NOT EXISTS activities (
   mode TEXT NOT NULL DEFAULT 'call' CHECK (mode IN ('call', 'email', 'text', 'visit', 'update')),
   outcome TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '',
-  follow_up_at TEXT,
+  next_action TEXT,
+  due_date TEXT,
   created_at TEXT NOT NULL
 );
 

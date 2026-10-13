@@ -15,9 +15,10 @@ def get_account(conn, contractor_id: str, user_id: int) -> dict:
     if row:
         return dict(row)
     owner = conn.execute("SELECT name FROM users WHERE id = ?", (user_id,)).fetchone()
+    action, days = next_best_action(conn, contractor_id, "discovered", None)
     return {"contractor_id": contractor_id, "stage": "discovered", "owner_id": user_id,
-            "owner_name": owner["name"] if owner else None, "next_action": "Review the brief and save to My Focus",
-            "due_date": date.today().isoformat(), "opportunity_note": None}
+            "owner_name": owner["name"] if owner else None, "next_action": action,
+            "due_date": (date.today() + timedelta(days=days)).isoformat(), "opportunity_note": None}
 
 
 def next_best_action(conn, contractor_id: str, stage: str, last_outcome: str | None) -> tuple[str, int]:
@@ -25,11 +26,9 @@ def next_best_action(conn, contractor_id: str, stage: str, last_outcome: str | N
     facts = loads(conn.execute("SELECT website_facts FROM contractors WHERE id = ?",
                                (contractor_id,)).fetchone()["website_facts"], {})
     person = (facts.get("decision_makers") or [None])[0]
-    if stage == "discovered":
-        return "Review the brief and save to My Focus", 0
-    if stage == "researching":
+    if stage in ("discovered", "researching"):
         return (f"Call {person['name']} ({person['role']})" if person
-                else "Call the main line and ask for the owner or purchasing"), 1
+                else "Call the main line and ask for the owner or purchasing"), 0 if stage == "discovered" else 1
     if stage == "contacted":
         return {
             "No response": ("Try again by email or at a different time", 2),
@@ -41,10 +40,12 @@ def next_best_action(conn, contractor_id: str, stage: str, last_outcome: str | N
     return "Review reorder timing and cross-sell", 7
 
 
-def log(conn, contractor_id: str, user_id: int, mode: str, outcome: str, note: str = "") -> None:
+def log(conn, contractor_id: str, user_id: int, mode: str, outcome: str, note: str = "",
+        next_action: str | None = None, due_date: str | None = None) -> None:
     conn.execute(
-        "INSERT INTO activities (user_id, contractor_id, mode, outcome, note, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, contractor_id, mode, outcome, note, now()))
+        """INSERT INTO activities (user_id, contractor_id, mode, outcome, note, next_action, due_date, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (user_id, contractor_id, mode, outcome, note, next_action, due_date, now()))
 
 
 def set_stage(conn, contractor_id: str, user_id: int, stage: str, *, last_outcome: str | None = None,
