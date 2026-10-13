@@ -52,7 +52,7 @@ export interface Lead {
   rank: number;
   name: string;
   location: string;
-  distanceMi: number;
+  distanceMi: number | null;
   priority: Priority;
   /** One sentence: why this contractor is worth a call. */
   reason: string;

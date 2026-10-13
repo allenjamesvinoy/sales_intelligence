@@ -7,7 +7,6 @@ import type { Api } from './index';
  * localStorage, so the write calls have nothing to do.
  */
 
-const UPDATED_AT = '2026-10-12T09:40:00';
 
 const LEADS: Lead[] = [
   {
@@ -220,7 +219,7 @@ const LEADS: Lead[] = [
 export const mockApi: Api = {
   // The delay keeps the loading state visible, as a real request would.
   getLeads: () =>
-    new Promise<LeadsResponse>((resolve) => setTimeout(() => resolve({ updatedAt: UPDATED_AT, leads: LEADS }), 400)),
+    new Promise<LeadsResponse>((resolve) => setTimeout(() => resolve({ updatedAt: new Date().toISOString(), leads: LEADS }), 400)),
   updateStage: async () => {},
   recordActivity: async () => {},
 };

@@ -71,7 +71,7 @@ export interface LeadCardProps {
   id: string;
   name: string;
   location: string;
-  distanceMi?: number;
+  distanceMi?: number | null;
   priority?: Priority;
   reason?: string;
   categories?: string[];

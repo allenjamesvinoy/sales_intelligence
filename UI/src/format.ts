@@ -22,7 +22,7 @@ export function formatDistance(mi: number): string {
   return `${mi.toFixed(1)} mi`;
 }
 
-const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 
 export function isStale(iso: string, now = Date.now()): boolean {
   return now - new Date(iso).getTime() > STALE_AFTER_MS;

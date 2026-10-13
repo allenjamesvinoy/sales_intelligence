@@ -53,7 +53,7 @@ export function renderDetail(lead: Lead | undefined): HTMLElement {
         { className: 'lb-card-meta' },
         icon('pin'),
         h('span', null, lead.location),
-        h('span', { className: 'lb-data' }, `· ${formatDistance(lead.distanceMi)}`),
+        lead.distanceMi != null && h('span', { className: 'lb-data' }, `· ${formatDistance(lead.distanceMi)}`),
         h('span', null, `· ${STAGE_LABEL[state.stage]}`),
       ),
       stageActions(lead.id, state.stage),
