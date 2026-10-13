@@ -1,10 +1,15 @@
 export type Priority = 'high' | 'medium' | 'low';
 export type FitLevel = 'high' | 'medium' | 'unknown';
-export type ContactAvailability = 'verified' | 'company' | 'none';
 export type Stage = 'recommended' | 'focus' | 'done' | 'dismissed';
 export type Outcome = 'Connected' | 'No response' | 'Follow-up needed' | 'Qualified' | 'Not relevant';
 
+export type InteractionMode = 'call' | 'email' | 'text' | 'visit';
+/** The shared sales journey. Customer needs order history, so it is shown as a future state. */
+export type AccountStage = 'discovered' | 'researching' | 'contacted' | 'opportunity' | 'customer';
+
 export const OUTCOMES: readonly Outcome[] = ['Connected', 'No response', 'Follow-up needed', 'Qualified', 'Not relevant'];
+export const MODES: readonly InteractionMode[] = ['call', 'email', 'text', 'visit'];
+export const ACCOUNT_STAGES: readonly AccountStage[] = ['discovered', 'researching', 'contacted', 'opportunity', 'customer'];
 
 export interface ContactPerson {
   name: string;
@@ -58,7 +63,7 @@ export interface Lead {
   reason: string;
   /** Up to three, shown on the card. */
   categories: string[];
-  nextAction: string;
+  account: Account;
   overview: Overview;
   evidence: EvidenceItem[];
   productFit: ProductFit[];
@@ -67,19 +72,47 @@ export interface Lead {
   questions: string[];
 }
 
-export interface ActivityEntry {
-  outcome: Outcome;
-  note: string;
-  followUp?: string;
-  /** ISO timestamp the outcome was saved. */
-  at: string;
+/** Every account always has a stage, owner, next action and due date. */
+export interface Account {
+  stage: AccountStage;
+  owner: { id: number; name: string };
+  nextAction: string;
+  /** yyyy-mm-dd */
+  dueDate: string;
+  opportunityNote: string | null;
 }
 
+export interface Interaction {
+  id: number;
+  /** ISO timestamp */
+  at: string;
+  user: string;
+  /** "update" entries record stage changes. */
+  mode: InteractionMode | 'update';
+  outcome: string;
+  note: string;
+}
+
+/** GET /accounts/:id */
+export interface AccountDetail {
+  account: Account;
+  interactions: Interaction[];
+}
+
+export interface InteractionInput {
+  mode: InteractionMode;
+  outcome: Outcome;
+  note: string;
+  /** Blank means "use the suggested next step". */
+  nextAction?: string;
+  dueDate?: string;
+}
+
+/** The rep's own board position for a lead. */
 export interface LeadState {
   stage: Stage;
-  activity: ActivityEntry[];
-  /** ISO date (yyyy-mm-dd) the lead returns to My Focus. */
-  followUp?: string;
+  /** Manual position within its column; falls back to the queue rank. */
+  order?: number | null;
 }
 
 /** GET /leads */
@@ -87,6 +120,19 @@ export interface LeadsResponse {
   /** ISO timestamp of the last data refresh, shown as the freshness stamp. */
   updatedAt: string;
   leads: Lead[];
-  /** Saved stage and activity per lead id. Omitted by the sample data, which keeps state in the browser. */
+  /** Board stage and order per lead id. Omitted by the sample data, which keeps state in the browser. */
   states?: Record<string, LeadState>;
+}
+
+export type FocusLevel = 'primary' | 'secondary' | 'not_assigned';
+
+/** GET /me */
+export interface Profile {
+  /** Background re-import after a territory change: "running", "done", "failed: …", or null. */
+  refresh: string | null;
+  profile: { name: string; email: string; role: string; team: number | null; manager: string | null; branch: string; timezone: string };
+  territory: { segment: string; postalCode: string; radiusMiles: number } | null;
+  products: { name: string; focus: FocusLevel }[];
+  queue: { dailyLimit: number; readyBy: string; lastRefresh: string | null } | null;
+  summary: string | null;
 }

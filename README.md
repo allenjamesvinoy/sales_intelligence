@@ -47,6 +47,20 @@ cd UI && npm install && npm run dev   # http://localhost:5173
 | OpenAI | Extracting facts from pages | Runs only when a page's content hash changed. Input is capped at 30k characters. |
 | Perplexity | Researching contractors with no readable website | Only as a fallback, using the `sonar` model with low search depth. Results are kept for 30 days. A contractor's own site always replaces web research once found. |
 
+## Sales journey
+
+Board columns (Recommended, My Focus, Congrats!) belong to each rep. The account journey is shared by the team:
+
+| # | Stage | Reached when |
+| --- | --- | --- |
+| 1 | Discovered | The contractor appears in a rep's ranked queue |
+| 2 | Researching | A rep saves it to My Focus |
+| 3 | Contacted | Anyone logs a call, email, text or visit |
+| 4 | Opportunity | A rep records a confirmed need (or drags it to Congrats!) |
+| 5 | Customer | Future: needs order history for reorder, cross-sell and risk signals |
+
+Every account always has a stage, owner, next action, due date and recommendation reason. The next action is suggested from the stage and the last outcome (`backend/app/accounts.py`), and reps can override it.
+
 ## AI traceability
 
 - Every OpenAI call is stored in `ai_traces`: purpose, model, prompt version, source URL, input hash, structured output, tokens and latency.
@@ -58,8 +72,11 @@ cd UI && npm install && npm run dev   # http://localhost:5173
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/leads` | Latest morning queue + the rep's leads and states (`LeadsResponse` in `UI/src/types.ts`) |
-| `PUT` | `/leads/:id/stage` | `{ stage }`, called when a card is dragged |
-| `POST` | `/leads/:id/activity` | `{ outcome, note, followUp? }`: saves an outcome and moves the lead to Done |
+| `PUT` | `/leads/:id/stage` | `{ stage, order? }`: drag on the rep's board; the shared account stage follows |
+| `GET` | `/accounts/:id` | Shared account (stage, owner, next action, due date) and the team's interaction log |
+| `POST` | `/accounts/:id/interactions` | `{ mode, outcome, note, nextAction?, dueDate? }`: blank next action uses the suggested step |
+| `POST` | `/accounts/:id/opportunity` | `{ note }`: stage 4, a confirmed need; moves the card to Congrats! |
+| `PUT` | `/accounts/:id/next-action` | `{ nextAction, dueDate }` |
 | `GET` | `/leads/:id/trace` | Ranking factors and AI calls behind a lead |
 | `GET` | `/me` | Rep profile, territory, product focus, queue settings |
 

@@ -1,10 +1,9 @@
 import { api } from './api';
-import type { ActivityEntry, LeadState, Stage } from './types';
+import type { LeadState, Stage } from './types';
 
 /**
- * Lead stage and activity. Changes apply locally at once (and are cached in
- * localStorage), then go to the backend through `api`. With the sample data
- * the api calls do nothing and localStorage is the only copy.
+ * The rep's board: each lead's column and order. Changes apply locally at once
+ * (and are cached in localStorage), then go to the backend through `api`.
  */
 
 const STATE_KEY = 'leads.state.v1';
@@ -33,8 +32,11 @@ function persist(): void {
   listeners.forEach((fn) => fn());
 }
 
-function sync(request: Promise<void>): void {
-  request.catch((err: unknown) => console.error('[InstaHermes] Could not save to the backend', err));
+/** Saves to the backend, then signals that server-derived data (account stage, next action) may have changed. */
+export function sync(request: Promise<void>): Promise<void> {
+  return request
+    .then(() => void window.dispatchEvent(new Event('leads:changed')))
+    .catch((err: unknown) => console.error('[InstaHermes] Could not save to the backend', err));
 }
 
 /** Replaces local state with what the backend returned. */
@@ -49,16 +51,13 @@ export function subscribe(fn: Listener): () => void {
 }
 
 export function getLeadState(id: string): LeadState {
-  return state[id] ?? { stage: 'recommended', activity: [] };
+  return state[id] ?? { stage: 'recommended' };
 }
 
-export function setStage(id: string, stage: Stage): void {
-  const prev = getLeadState(id);
-  // A lead pulled out of Done by hand no longer needs its scheduled return.
-  const followUp = stage === 'done' ? prev.followUp : undefined;
-  state = { ...state, [id]: { ...prev, stage, followUp } };
+export function setStage(id: string, stage: Stage, order?: number): void {
+  state = { ...state, [id]: { stage, order } };
   persist();
-  sync(api.updateStage(id, stage));
+  sync(api.updateStage(id, stage, order));
 }
 
 export function restoreDismissed(): void {
@@ -68,35 +67,6 @@ export function restoreDismissed(): void {
   state = next;
   persist();
   ids.forEach((id) => sync(api.updateStage(id, 'recommended')));
-}
-
-/** Saving an outcome moves the lead to Done; a follow-up date brings it back later. */
-export function recordOutcome(id: string, entry: ActivityEntry): void {
-  const prev = getLeadState(id);
-  state = {
-    ...state,
-    [id]: {
-      stage: 'done',
-      activity: [entry, ...prev.activity],
-      followUp: entry.followUp,
-    },
-  };
-  persist();
-  sync(api.recordActivity(id, entry));
-}
-
-/** Returns Done leads whose follow-up date has arrived to My Focus. */
-export function applyDueFollowUps(today: string): void {
-  const due = Object.keys(state).filter((id) => {
-    const s = state[id];
-    return s.stage === 'done' && s.followUp && s.followUp <= today;
-  });
-  if (due.length === 0) return;
-  const next = { ...state };
-  for (const id of due) next[id] = { ...next[id], stage: 'focus', followUp: undefined };
-  state = next;
-  persist();
-  due.forEach((id) => sync(api.updateStage(id, 'focus')));
 }
 
 export type Theme = 'light' | 'dark';

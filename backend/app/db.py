@@ -36,6 +36,10 @@ def transaction():
 def init() -> None:
     with transaction() as conn:
         conn.executescript((Path(__file__).parent / "schema.sql").read_text())
+        for table, column, ddl in [("lead_states", "sort_order", "REAL"),
+                                   ("activities", "mode", "TEXT NOT NULL DEFAULT 'call'")]:
+            if column not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 def loads(value: str | None, default=None):

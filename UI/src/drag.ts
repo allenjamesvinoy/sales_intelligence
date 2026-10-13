@@ -1,7 +1,8 @@
 /**
  * Pointer-based drag and drop for board cards. Works with mouse, pen and
  * touch (press and hold to pick up a card), unlike native HTML5 drag events.
- * Drop targets are any element with a `data-drop` attribute naming a column.
+ * Drop targets are any element with a `data-drop` attribute naming a column;
+ * inside a column, the drop position is the card the pointer is above.
  */
 
 const DRAG_THRESHOLD_PX = 6;
@@ -9,10 +10,13 @@ const LONG_PRESS_MS = 250;
 const TOUCH_SLOP_PX = 8;
 const EDGE_SCROLL_PX = 48;
 
+type DropHandler = (to: string, beforeId: string | null) => void;
+
 interface Session {
   card: HTMLElement;
   from: string;
-  onDrop: (to: string) => void;
+  canDrop: (to: string) => boolean;
+  onDrop: DropHandler;
   pointerId: number;
   startX: number;
   startY: number;
@@ -23,12 +27,15 @@ interface Session {
   timer?: number;
   ghost?: HTMLElement;
   target?: HTMLElement | null;
+  beforeId: string | null;
+  /** The card showing the insertion line. */
+  marker?: HTMLElement;
 }
 
 let session: Session | null = null;
 let suppressClick = false;
 
-export function makeDraggable(card: HTMLElement, from: string, onDrop: (to: string) => void): void {
+export function makeDraggable(card: HTMLElement, from: string, canDrop: (to: string) => boolean, onDrop: DropHandler): void {
   card.addEventListener('dragstart', (e) => e.preventDefault());
   card.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || session) return;
@@ -37,7 +44,9 @@ export function makeDraggable(card: HTMLElement, from: string, onDrop: (to: stri
     const s: Session = {
       card,
       from,
+      canDrop,
       onDrop,
+      beforeId: null,
       pointerId: e.pointerId,
       startX: e.clientX,
       startY: e.clientY,
@@ -73,10 +82,25 @@ function move(s: Session, x: number, y: number): void {
   s.ghost.style.transform = `translate(${x - s.offsetX}px, ${y - s.offsetY}px)`;
 
   const target = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-drop]') ?? null;
+  const allowed = !!target && s.canDrop(target.dataset.drop ?? '');
   if (target !== s.target) {
     s.target?.classList.remove('is-drop-target');
-    if (target && target.dataset.drop !== s.from) target.classList.add('is-drop-target');
+    if (allowed && target!.dataset.drop !== s.from) target!.classList.add('is-drop-target');
     s.target = target;
+  }
+
+  s.marker?.classList.remove('drop-before', 'drop-after');
+  s.marker = undefined;
+  s.beforeId = null;
+  if (allowed && target!.classList.contains('lb-col')) {
+    const cards = [...target!.querySelectorAll<HTMLElement>('.lb-card[data-lead]')].filter((c) => c !== s.card);
+    const next = cards.find((c) => {
+      const r = c.getBoundingClientRect();
+      return y < r.top + r.height / 2;
+    });
+    s.beforeId = next?.dataset.lead ?? null;
+    s.marker = next ?? cards[cards.length - 1];
+    s.marker?.classList.add(next ? 'drop-before' : 'drop-after');
   }
 
   if (y < EDGE_SCROLL_PX) window.scrollBy(0, -12);
@@ -93,6 +117,7 @@ function end(drop: boolean): void {
   s.ghost.remove();
   s.card.classList.remove('is-dragging');
   s.target?.classList.remove('is-drop-target');
+  s.marker?.classList.remove('drop-before', 'drop-after');
   document.body.classList.remove('is-dragging-card');
 
   // The pointerup that ends a drag would otherwise click the card's link.
@@ -100,7 +125,7 @@ function end(drop: boolean): void {
   window.setTimeout(() => (suppressClick = false), 0);
 
   const to = s.target?.dataset.drop;
-  if (drop && to && to !== s.from) s.onDrop(to);
+  if (drop && to && s.canDrop(to)) s.onDrop(to, s.beforeId);
 }
 
 window.addEventListener('pointermove', (e) => {

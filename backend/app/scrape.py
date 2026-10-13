@@ -1,11 +1,16 @@
 import json
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 from . import llm
 from .apify import fetch_pages
 from .config import PROFILE_REFETCH_DAYS
 from .db import days_ago, now
 from .perplexity import research
+
+
+def gaf_search_url(postal_code: str, radius: int, segment: str = "residential", first_result: int = 0) -> str:
+    url = f"https://www.gaf.com/en-us/roofing-contractors/{segment}?distance={radius}&postalCode={postal_code}&countryCode=us"
+    return f"{url}#firstResult={first_result}" if first_result else url
 
 
 def contractor_id(profile_url: str) -> str:
@@ -36,6 +41,9 @@ def scrape_gaf_list(conn, url: str) -> list[str]:
         "INSERT INTO contractor_index_versions (source_url, created_at) VALUES (?, ?)", (url, now())
     ).lastrowid
     segment = "residential" if "/residential" in url else "commercial" if "/commercial" in url else None
+    postal_code = parse_qs(urlparse(url).query).get("postalCode", [None])[0]
+    if not postal_code:
+        raise ValueError("The GAF URL needs a postalCode, e.g. " + gaf_search_url("10013", 25))
 
     page = next(iter(fetch_pages([url], browser=True).values()), "")
     start = page.find("Showing ")
@@ -49,17 +57,18 @@ def scrape_gaf_list(conn, url: str) -> list[str]:
         profile_url = urljoin("https://www.gaf.com", c.gaf_profile_url)
         cid = contractor_id(profile_url)
         conn.execute(
-            """INSERT INTO contractors (id, name, gaf_profile_url, city, state, distance_miles, segment,
+            """INSERT INTO contractors (id, name, gaf_profile_url, city, state, segment,
                  certifications, rating, review_count, phone, index_version_id, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT (id) DO UPDATE SET name = excluded.name, gaf_profile_url = excluded.gaf_profile_url,
-                 city = excluded.city, state = excluded.state, distance_miles = excluded.distance_miles,
-                 segment = excluded.segment, certifications = excluded.certifications, rating = excluded.rating,
+                 city = excluded.city, state = excluded.state, segment = excluded.segment, certifications = excluded.certifications, rating = excluded.rating,
                  review_count = excluded.review_count, phone = excluded.phone,
                  index_version_id = excluded.index_version_id, updated_at = excluded.updated_at""",
-            (cid, c.name, profile_url, c.city, c.state, c.distance_miles, segment, json.dumps(c.certifications),
+            (cid, c.name, profile_url, c.city, c.state, segment, json.dumps(c.certifications),
              c.rating, c.review_count, c.phone, version_id, now()),
         )
+        if c.distance_miles is not None:
+            conn.execute("INSERT OR REPLACE INTO contractor_distances VALUES (?, ?, ?)", (cid, postal_code, c.distance_miles))
         ids.append(cid)
         profile_urls.append(profile_url)
     conn.commit()

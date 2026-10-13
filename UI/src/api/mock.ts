@@ -1,14 +1,16 @@
-import type { Lead, LeadsResponse } from '../types';
+import { todayIso } from '../format';
+import type { Account, AccountDetail, Lead, LeadsResponse, Profile } from '../types';
 import type { Api } from './index';
 
 /**
  * In-browser stand-in for the backend, used when VITE_API_URL is not set.
- * Every contractor here is fictional. Lead state is kept by the store in
- * localStorage, so the write calls have nothing to do.
+ * Every contractor here is fictional. Board state is kept by the store in
+ * localStorage; accounts live in memory for the session.
  */
 
+type SampleLead = Omit<Lead, 'account'> & { nextAction: string };
 
-const LEADS: Lead[] = [
+const LEADS: SampleLead[] = [
   {
     id: 'summit-ridge-roofing',
     rank: 1,
@@ -216,10 +218,58 @@ const LEADS: Lead[] = [
   },
 ];
 
+const OWNER = { id: 1, name: 'Alex Rivera' };
+const details = new Map<string, AccountDetail>();
+
+function detail(id: string): AccountDetail {
+  const lead = LEADS.find((l) => l.id === id);
+  if (!details.has(id)) {
+    const account: Account = { stage: 'discovered', owner: OWNER, nextAction: lead?.nextAction ?? '', dueDate: todayIso(), opportunityNote: null };
+    details.set(id, { account, interactions: [] });
+  }
+  return details.get(id)!;
+}
+
+function record(id: string, mode: AccountDetail['interactions'][number]['mode'], outcome: string, note = ''): void {
+  const d = detail(id);
+  d.interactions.unshift({ id: Date.now(), at: new Date().toISOString(), user: OWNER.name, mode, outcome, note });
+}
+
 export const mockApi: Api = {
   // The delay keeps the loading state visible, as a real request would.
   getLeads: () =>
-    new Promise<LeadsResponse>((resolve) => setTimeout(() => resolve({ updatedAt: new Date().toISOString(), leads: LEADS }), 400)),
+    new Promise<LeadsResponse>((resolve) =>
+      setTimeout(() => resolve({ updatedAt: new Date().toISOString(), leads: LEADS.map((l) => ({ ...l, account: detail(l.id).account })) }), 400),
+    ),
   updateStage: async () => {},
-  recordActivity: async () => {},
+  getAccount: async (id) => structuredClone(detail(id)),
+  logInteraction: async (id, input) => {
+    record(id, input.mode, input.outcome, input.note);
+    Object.assign(detail(id).account, { stage: 'contacted', nextAction: input.nextAction || 'Follow up', dueDate: input.dueDate || todayIso() });
+  },
+  convertToOpportunity: async (id, note) => {
+    record(id, 'update', 'Moved to Opportunity', note);
+    Object.assign(detail(id).account, { stage: 'opportunity', opportunityNote: note, nextAction: 'Prepare a quote for the confirmed need' });
+  },
+  updateNextAction: async (id, nextAction, dueDate) => {
+    Object.assign(detail(id).account, { nextAction, dueDate });
+  },
+  getProfile: async () => PROFILE,
+  updateTerritory: async (postalCode, radiusMiles) => {
+    PROFILE.territory = { segment: 'residential', postalCode, radiusMiles };
+  },
+};
+
+const PROFILE: Profile = {
+  refresh: null,
+  profile: { name: 'Alex Rivera', email: 'alex@example.com', role: 'Residential sales representative', team: null, manager: null, branch: 'Manhattan', timezone: 'America/New_York' },
+  territory: { segment: 'residential', postalCode: '10013', radiusMiles: 25 },
+  products: [
+    { name: 'Residential shingles', focus: 'primary' },
+    { name: 'Underlayment', focus: 'primary' },
+    { name: 'Ventilation', focus: 'secondary' },
+    { name: 'Metal roofing', focus: 'secondary' },
+  ],
+  queue: { dailyLimit: 10, readyBy: '06:00', lastRefresh: null },
+  summary: null,
 };

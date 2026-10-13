@@ -88,3 +88,41 @@ body.is-dragging-card, body.is-dragging-card * { cursor: grabbing !important; }
 .history-head { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: baseline; }
 .lb-field-error { font-size: 12px; line-height: 16px; color: var(--danger); margin: 0; }
 .lb-field-error:empty { display: none; }
+
+.app-nav { display: flex; align-items: center; gap: var(--space-2); }
+.app-nav-link { color: var(--ink); font-weight: 600; text-decoration: none; padding: 4px var(--space-2); border-radius: var(--radius-sm); }
+.app-nav-link:hover { background: var(--surface-sunken); }
+.lb-card-caller { display: flex; flex-direction: column; gap: 2px; padding-top: var(--space-2); border-top: 1px solid var(--line); }
+.lb-card-caller .lb-card-contact { color: var(--ink); }
+.lb-card-caller a.lb-card-contact { color: var(--link); width: fit-content; }
+select.lb-input { min-width: 96px; }
+.lb-card.drop-before::before,
+.lb-card.drop-after::after { content: ""; position: absolute; left: 0; right: 0; height: 3px; border-radius: 2px; background: var(--copper); }
+.lb-card.drop-before::before { top: -8px; }
+.lb-card.drop-after::after { bottom: -8px; }
+
+/* Account view */
+.account { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-4); }
+.account-layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--space-4); align-items: start; }
+.account-main, .account-brief { display: flex; flex-direction: column; gap: var(--space-4); }
+@media (max-width: 899px) { .account-layout { grid-template-columns: minmax(0, 1fr); } }
+
+.stage-track { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-1); }
+.stage-track li { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2); border-radius: var(--radius-sm); background: var(--surface-sunken); color: var(--ink-muted); font-size: 12px; line-height: 16px; font-weight: 600; min-width: 0; }
+.stage-track li.is-past { color: var(--teal); background: var(--teal-soft); }
+.stage-track li.is-current { color: var(--on-copper); background: var(--copper); }
+.stage-track li.is-future { border: 1px dashed var(--line-strong); background: transparent; }
+.stage-num { opacity: .8; }
+@media (max-width: 599px) { .stage-track { grid-template-columns: minmax(0, 1fr); } }
+
+.lb-next.is-overdue .lb-data { color: var(--amber); }
+.account-status .lb-next { border-top: 0; padding-top: 0; display: inline; }
+.account-status dd .lb-btn { margin-left: var(--space-2); vertical-align: middle; }
+.lb-field.grow { flex: 1; min-width: 200px; }
+.lb-followup .lb-input:not([type="date"]) { flex: 1; min-width: 200px; }
+
+.activity-summary { display: flex; flex-direction: column; gap: var(--space-1); }
+.timeline { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.timeline li { padding: var(--space-3) 0; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: var(--space-1); }
+.timeline li.is-update { color: var(--ink-muted); }
+.timeline-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); }

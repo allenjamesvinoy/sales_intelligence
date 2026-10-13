@@ -9,6 +9,7 @@ BASELINE_RESIDENTIAL = {"Residential shingles": "medium"}
 
 @dataclass
 class RepContext:
+    postal_code: str
     segment: str
     max_distance: float
     focus: dict[str, str]

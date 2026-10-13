@@ -1,28 +1,51 @@
+import re
 from typing import Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response
-from pydantic import BaseModel
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Response
+from pydantic import BaseModel, Field
 
-from . import db
+from . import accounts, db
 from .config import DEFAULT_USER_ID
 from .db import loads, now
-from .pipeline import rep_context
+from .pipeline import GAF_RADII, refresh, rep_context
 from .ranking import priority, product_fit, reason_sentence, score
 
+db.init()
 app = FastAPI(title="InstaHermes API")
+refresh_status: dict[int, str] = {}
+EMAIL = re.compile(r"^[\w.+-]+@[\w-]+(\.[\w-]+)+$")
 
 Stage = Literal["recommended", "focus", "done", "dismissed"]
 Outcome = Literal["Connected", "No response", "Follow-up needed", "Qualified", "Not relevant"]
+Mode = Literal["call", "email", "text", "visit"]
+ISO_DATE = r"^\d{4}-\d{2}-\d{2}$"
 
 
 class StageIn(BaseModel):
     stage: Stage
+    order: float | None = None
 
 
-class ActivityIn(BaseModel):
+class TerritoryIn(BaseModel):
+    postalCode: str = Field(pattern=r"^\d{5}$")
+    radiusMiles: Literal[GAF_RADII]
+
+
+class InteractionIn(BaseModel):
+    mode: Mode
     outcome: Outcome
     note: str = ""
-    followUp: str | None = None
+    nextAction: str | None = None
+    dueDate: str | None = Field(default=None, pattern=ISO_DATE)
+
+
+class OpportunityIn(BaseModel):
+    note: str = Field(min_length=1)
+
+
+class NextActionIn(BaseModel):
+    nextAction: str = Field(min_length=1)
+    dueDate: str = Field(pattern=ISO_DATE)
 
 
 def get_conn():
@@ -37,7 +60,12 @@ def user_id(x_user_id: int | None = Header(default=None)) -> int:
     return x_user_id or DEFAULT_USER_ID
 
 
-def to_lead(c, rank: int, final_score: float, reasons: list[dict], next_action: str | None) -> dict:
+def account_json(a: dict) -> dict:
+    return {"stage": a["stage"], "owner": {"id": a["owner_id"], "name": a["owner_name"]},
+            "nextAction": a["next_action"], "dueDate": a["due_date"], "opportunityNote": a["opportunity_note"]}
+
+
+def to_lead(c, rank: int, final_score: float, reasons: list[dict], account: dict) -> dict:
     gaf = loads(c["gaf_facts"], {})
     web = loads(c["website_facts"], {})
     fit = product_fit(c)
@@ -58,7 +86,7 @@ def to_lead(c, rank: int, final_score: float, reasons: list[dict], next_action: 
         "priority": priority(final_score),
         "reason": reason_sentence(reasons),
         "categories": sorted(fit, key=lambda k: fit[k] != "high")[:3],
-        "nextAction": next_action or (f"Call {person['name']}" if person else "Ask for the owner or the person who orders materials"),
+        "account": account_json(account),
         "overview": {
             "businessType": f"{c['segment'].capitalize()} roofing contractor" if c["segment"] else None,
             "address": gaf.get("address"),
@@ -71,9 +99,10 @@ def to_lead(c, rank: int, final_score: float, reasons: list[dict], next_action: 
         "evidence": evidence,
         "productFit": [{k: p[k] for k in ("category", "level", "reason", "question")} for p in web.get("product_fit", [])],
         "contact": {
-            "person": person and {"name": person["name"], "role": person["role"], "verified": True, "source": "Web research" if sources else "Company website"},
+            "person": person and {"name": person["name"], "role": person["role"], "verified": False,
+                                  "source": "Web research" if sources else "Company website"},
             "phone": c["phone"] or next(iter(web.get("phones", [])), None),
-            "email": next(iter(web.get("emails", [])), None),
+            "email": next((e for e in web.get("emails", []) if EMAIL.match(e)), None),
             "website": c["website"],
         },
         "opener": web.get("opener"),
@@ -93,29 +122,25 @@ def get_leads(uid: int = Depends(user_id), conn=Depends(get_conn)):
     states = {r["contractor_id"]: r for r in conn.execute("SELECT * FROM lead_states WHERE user_id = ?", (uid,))}
 
     ids = list(items) + [cid for cid in states if cid not in items]
-    contractors = {r["id"]: r for r in conn.execute(
-        f"SELECT * FROM contractors WHERE id IN ({','.join('?' * len(ids))})", ids)}
     rep, _ = rep_context(conn, uid)
+    contractors = {r["id"]: r for r in conn.execute(
+        f"""SELECT c.*, d.distance_miles FROM contractors c
+            LEFT JOIN contractor_distances d ON d.contractor_id = c.id AND d.postal_code = ?
+            WHERE c.id IN ({','.join('?' * len(ids))})""", [rep.postal_code, *ids])}
 
     leads = []
     for cid in ids:
-        c, item, state = contractors[cid], items.get(cid), states.get(cid)
+        c, item = contractors[cid], items.get(cid)
         if item:
             rank, final_score, reasons = item["position"], item["final_score"], loads(item["final_reasons"])
         else:
             rank, (final_score, reasons) = len(leads) + 1, score(c, rep)
-        leads.append(to_lead(c, rank, final_score, reasons, state and state["next_action"]))
-
-    activity = {}
-    for a in conn.execute("SELECT * FROM activities WHERE user_id = ? ORDER BY created_at DESC", (uid,)):
-        activity.setdefault(a["contractor_id"], []).append(
-            {"outcome": a["outcome"], "note": a["note"], "followUp": a["follow_up_at"], "at": a["created_at"]})
+        leads.append(to_lead(c, rank, final_score, reasons, accounts.get_account(conn, cid, uid)))
 
     return {
         "updatedAt": queue["published_at"] if queue else now(),
         "leads": leads,
-        "states": {cid: {"stage": s["stage"], "activity": activity.get(cid, []), "followUp": s["follow_up_at"]}
-                   for cid, s in states.items()},
+        "states": {cid: {"stage": s["stage"], "order": s["sort_order"]} for cid, s in states.items()},
     }
 
 
@@ -124,36 +149,91 @@ def require_contractor(conn, contractor_id: str) -> None:
         raise HTTPException(404, "Contractor not found")
 
 
-def upsert_state(conn, uid: int, contractor_id: str, stage: str, follow_up: str | None) -> None:
+def board_stage(conn, uid: int, contractor_id: str) -> str:
+    row = conn.execute("SELECT stage FROM lead_states WHERE user_id = ? AND contractor_id = ?",
+                       (uid, contractor_id)).fetchone()
+    return row["stage"] if row else "recommended"
+
+
+def upsert_state(conn, uid: int, contractor_id: str, stage: str, order: float | None = None) -> None:
     conn.execute(
-        """INSERT INTO lead_states (user_id, contractor_id, stage, assigned_at, follow_up_at, updated_at)
+        """INSERT INTO lead_states (user_id, contractor_id, stage, assigned_at, sort_order, updated_at)
            VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT (user_id, contractor_id) DO UPDATE SET stage = excluded.stage,
-             follow_up_at = excluded.follow_up_at, updated_at = excluded.updated_at""",
-        (uid, contractor_id, stage, now(), follow_up, now()),
+             sort_order = excluded.sort_order, updated_at = excluded.updated_at""",
+        (uid, contractor_id, stage, now(), order, now()),
     )
 
 
 @app.put("/leads/{contractor_id}/stage", status_code=204)
 def put_stage(contractor_id: str, body: StageIn, uid: int = Depends(user_id), conn=Depends(get_conn)):
+    """Moves a card on the rep's board; the shared account stage follows."""
     require_contractor(conn, contractor_id)
     with conn:
-        current = conn.execute("SELECT follow_up_at FROM lead_states WHERE user_id = ? AND contractor_id = ?",
-                               (uid, contractor_id)).fetchone()
-        upsert_state(conn, uid, contractor_id, body.stage,
-                     current["follow_up_at"] if current and body.stage == "done" else None)
+        before = board_stage(conn, uid, contractor_id)
+        if body.stage == "done" and before == "recommended":
+            raise HTTPException(409, "Move the lead to My Focus before completing it")
+        upsert_state(conn, uid, contractor_id, body.stage, body.order)
+        if body.stage == "focus" and before in ("recommended", "dismissed"):
+            accounts.set_stage(conn, contractor_id, uid, "researching")
+        elif body.stage == "done" and before != "done":
+            accounts.set_stage(conn, contractor_id, uid, "opportunity")
+        elif body.stage == "focus" and before == "done":
+            contacted = conn.execute("SELECT 1 FROM activities WHERE contractor_id = ? AND mode != 'update'",
+                                     (contractor_id,)).fetchone()
+            accounts.set_stage(conn, contractor_id, uid, "contacted" if contacted else "researching", forward_only=False)
     return Response(status_code=204)
 
 
-@app.post("/leads/{contractor_id}/activity", status_code=204)
-def post_activity(contractor_id: str, body: ActivityIn, uid: int = Depends(user_id), conn=Depends(get_conn)):
+@app.get("/accounts/{contractor_id}")
+def get_account(contractor_id: str, uid: int = Depends(user_id), conn=Depends(get_conn)):
+    """The shared account and its full interaction log across reps, newest first."""
+    require_contractor(conn, contractor_id)
+    log = conn.execute(
+        """SELECT a.id, a.created_at, u.name AS user, a.mode, a.outcome, a.note FROM activities a
+           JOIN users u ON u.id = a.user_id WHERE a.contractor_id = ? ORDER BY a.created_at DESC, a.id DESC""",
+        (contractor_id,)).fetchall()
+    return {
+        "account": account_json(accounts.get_account(conn, contractor_id, uid)),
+        "interactions": [{"id": r["id"], "at": r["created_at"], "user": r["user"], "mode": r["mode"],
+                          "outcome": r["outcome"], "note": r["note"]} for r in log],
+    }
+
+
+def require_worked(conn, uid: int, contractor_id: str) -> None:
+    require_contractor(conn, contractor_id)
+    if board_stage(conn, uid, contractor_id) == "recommended":
+        raise HTTPException(409, "Move the lead to My Focus first")
+
+
+@app.post("/accounts/{contractor_id}/interactions", status_code=204)
+def post_interaction(contractor_id: str, body: InteractionIn, uid: int = Depends(user_id), conn=Depends(get_conn)):
+    require_worked(conn, uid, contractor_id)
+    with conn:
+        accounts.log(conn, contractor_id, uid, body.mode, body.outcome, body.note)
+        accounts.set_stage(conn, contractor_id, uid, "contacted", last_outcome=body.outcome,
+                           next_action=body.nextAction, due_date=body.dueDate)
+        if body.outcome == "Not relevant":
+            upsert_state(conn, uid, contractor_id, "dismissed")
+    return Response(status_code=204)
+
+
+@app.post("/accounts/{contractor_id}/opportunity", status_code=204)
+def post_opportunity(contractor_id: str, body: OpportunityIn, uid: int = Depends(user_id), conn=Depends(get_conn)):
+    """Stage 4: the rep confirmed a real need."""
+    require_worked(conn, uid, contractor_id)
+    with conn:
+        accounts.set_stage(conn, contractor_id, uid, "opportunity", note=body.note)
+        upsert_state(conn, uid, contractor_id, "done")
+    return Response(status_code=204)
+
+
+@app.put("/accounts/{contractor_id}/next-action", status_code=204)
+def put_next_action(contractor_id: str, body: NextActionIn, uid: int = Depends(user_id), conn=Depends(get_conn)):
     require_contractor(conn, contractor_id)
     with conn:
-        conn.execute(
-            "INSERT INTO activities (user_id, contractor_id, outcome, note, follow_up_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (uid, contractor_id, body.outcome, body.note, body.followUp, now()),
-        )
-        upsert_state(conn, uid, contractor_id, "done", body.followUp)
+        stage = accounts.get_account(conn, contractor_id, uid)["stage"]
+        accounts.set_stage(conn, contractor_id, uid, stage, next_action=body.nextAction, due_date=body.dueDate)
     return Response(status_code=204)
 
 
@@ -191,11 +271,36 @@ def get_me(uid: int = Depends(user_id), conn=Depends(get_conn)):
     last = conn.execute("SELECT MAX(published_at) FROM daily_queues WHERE user_id = ? AND status = 'published'",
                         (uid,)).fetchone()[0]
     return {
-        "profile": {k: user[k] for k in ("name", "email", "role", "team_id", "manager", "branch", "timezone")},
-        "territory": dict(scope) if scope else None,
-        "products": [dict(p) for p in products],
-        "queue": {**dict(prefs), "lastRefresh": last} if prefs else None,
+        "refresh": refresh_status.get(uid),
+        "profile": {"name": user["name"], "email": user["email"], "role": user["role"], "team": user["team_id"],
+                    "manager": user["manager"], "branch": user["branch"], "timezone": user["timezone"]},
+        "territory": scope and {"segment": scope["contractor_segment"], "postalCode": scope["territory_value"],
+                                "radiusMiles": scope["maximum_distance_miles"]},
+        "products": [{"name": p["name"], "focus": p["focus_level"]} for p in products],
+        "queue": prefs and {"dailyLimit": prefs["daily_recommendation_limit"],
+                            "readyBy": prefs["morning_queue_ready_by"], "lastRefresh": last},
         "summary": f"{user['role']} for the {user['branch']} branch, covering contractors within "
                    f"{scope['maximum_distance_miles']:g} miles of {scope['territory_type']} {scope['territory_value']}. "
                    f"Primary product areas: {' and '.join(primary) or 'none'}." if scope else None,
     }
+
+
+def refresh_in_background(uid: int) -> None:
+    try:
+        with db.transaction() as conn:
+            refresh(conn, user_ids=[uid], rebuild=True)
+        refresh_status[uid] = "done"
+    except Exception as err:
+        refresh_status[uid] = f"failed: {err}"
+
+
+@app.put("/me/territory", status_code=202)
+def put_territory(body: TerritoryIn, tasks: BackgroundTasks, uid: int = Depends(user_id), conn=Depends(get_conn)):
+    """Saves the rep's ZIP and radius, then re-imports GAF results and rebuilds today's queue."""
+    with conn:
+        conn.execute("UPDATE user_scopes SET territory_type = 'ZIP', territory_value = ?, maximum_distance_miles = ? "
+                     "WHERE user_id = ?", (body.postalCode, body.radiusMiles, uid))
+    if refresh_status.get(uid) != "running":
+        refresh_status[uid] = "running"
+        tasks.add_task(refresh_in_background, uid)
+    return {"refresh": "running"}

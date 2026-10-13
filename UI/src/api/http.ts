@@ -1,4 +1,4 @@
-import type { LeadsResponse } from '../types';
+import type { AccountDetail, LeadsResponse, Profile } from '../types';
 import type { Api } from './index';
 
 export class ApiError extends Error {
@@ -19,12 +19,22 @@ async function request<T>(baseUrl: string, path: string, init?: RequestInit): Pr
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
 }
 
+const account = (id: string) => `/accounts/${encodeURIComponent(id)}`;
+
 export function httpApi(baseUrl: string): Api {
   return {
     getLeads: () => request<LeadsResponse>(baseUrl, '/leads'),
-    updateStage: (id, stage) =>
-      request(baseUrl, `/leads/${encodeURIComponent(id)}/stage`, { method: 'PUT', body: JSON.stringify({ stage }) }),
-    recordActivity: (id, entry) =>
-      request(baseUrl, `/leads/${encodeURIComponent(id)}/activity`, { method: 'POST', body: JSON.stringify(entry) }),
+    updateStage: (id, stage, order) =>
+      request(baseUrl, `/leads/${encodeURIComponent(id)}/stage`, { method: 'PUT', body: JSON.stringify({ stage, order }) }),
+    getAccount: (id) => request<AccountDetail>(baseUrl, account(id)),
+    logInteraction: (id, input) =>
+      request(baseUrl, `${account(id)}/interactions`, { method: 'POST', body: JSON.stringify(input) }),
+    convertToOpportunity: (id, note) =>
+      request(baseUrl, `${account(id)}/opportunity`, { method: 'POST', body: JSON.stringify({ note }) }),
+    updateNextAction: (id, nextAction, dueDate) =>
+      request(baseUrl, `${account(id)}/next-action`, { method: 'PUT', body: JSON.stringify({ nextAction, dueDate }) }),
+    getProfile: () => request<Profile>(baseUrl, '/me'),
+    updateTerritory: (postalCode, radiusMiles) =>
+      request(baseUrl, '/me/territory', { method: 'PUT', body: JSON.stringify({ postalCode, radiusMiles }) }),
   };
 }

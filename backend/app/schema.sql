@@ -74,7 +74,6 @@ CREATE TABLE IF NOT EXISTS contractors (
   website TEXT,
   city TEXT,
   state TEXT,
-  distance_miles REAL,
   segment TEXT,
   certifications TEXT NOT NULL DEFAULT '[]',
   rating REAL,
@@ -84,6 +83,14 @@ CREATE TABLE IF NOT EXISTS contractors (
   website_facts TEXT,
   index_version_id INTEGER REFERENCES contractor_index_versions(id),
   updated_at TEXT NOT NULL
+);
+
+-- GAF reports distance from the searched ZIP, so it is stored per ZIP.
+CREATE TABLE IF NOT EXISTS contractor_distances (
+  contractor_id TEXT NOT NULL REFERENCES contractors(id),
+  postal_code TEXT NOT NULL,
+  distance_miles REAL NOT NULL,
+  PRIMARY KEY (contractor_id, postal_code)
 );
 
 CREATE TABLE IF NOT EXISTS web_pages (
@@ -120,10 +127,20 @@ CREATE TABLE IF NOT EXISTS lead_states (
   assigned_at TEXT NOT NULL,
   last_viewed_at TEXT,
   dismissed_reason TEXT,
-  next_action TEXT,
-  follow_up_at TEXT,
+  sort_order REAL,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (user_id, contractor_id)
+);
+
+-- Team-wide sales journey for a contractor; board columns stay per rep.
+CREATE TABLE IF NOT EXISTS accounts (
+  contractor_id TEXT PRIMARY KEY REFERENCES contractors(id),
+  stage TEXT NOT NULL CHECK (stage IN ('discovered', 'researching', 'contacted', 'opportunity', 'customer')),
+  owner_id INTEGER REFERENCES users(id),
+  next_action TEXT,
+  due_date TEXT,
+  opportunity_note TEXT,
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS activities (
@@ -131,6 +148,7 @@ CREATE TABLE IF NOT EXISTS activities (
   user_id INTEGER NOT NULL REFERENCES users(id),
   contractor_id TEXT NOT NULL REFERENCES contractors(id),
   outreach_task_id INTEGER,
+  mode TEXT NOT NULL DEFAULT 'call' CHECK (mode IN ('call', 'email', 'text', 'visit', 'update')),
   outcome TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '',
   follow_up_at TEXT,
