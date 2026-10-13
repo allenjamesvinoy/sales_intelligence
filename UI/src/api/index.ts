@@ -5,7 +5,7 @@
  * Set VITE_API_URL (see .env.example) to use the real backend; leave it
  * unset to run on the built-in sample data.
  */
-import type { AccountDetail, ChatMessage, InteractionInput, LeadsResponse, Person, PersonInput, Profile, Stage } from '../types';
+import type { AccountDetail, ChatMessage, InteractionDraft, InteractionInput, LeadsResponse, Person, PersonInput, Profile, Stage } from '../types';
 import { httpApi } from './http';
 import { mockApi } from './mock';
 
@@ -18,6 +18,10 @@ export interface Api {
   getAccount(id: string): Promise<AccountDetail>;
   /** POST /accounts/:id/interactions */
   logInteraction(id: string, input: InteractionInput): Promise<void>;
+  /** POST /accounts/:id/log-draft: chat in, draft interaction out */
+  draftInteraction(id: string, messages: ChatMessage[]): Promise<InteractionDraft>;
+  /** POST /transcribe: recorded audio in, text out */
+  transcribe(audio: Blob): Promise<string>;
   /** POST /accounts/:id/contacts */
   addContact(id: string, person: PersonInput): Promise<Person>;
   /** PUT /accounts/:id/contacts/:contactId */

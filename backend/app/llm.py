@@ -6,10 +6,10 @@ from typing import Literal, TypeVar
 from openai import OpenAI
 from pydantic import BaseModel
 
-from .config import OPENAI_MODEL
+from .config import OPENAI_MODEL, TRANSCRIBE_MODEL
 from .db import now
 
-PROMPT_VERSION = "2026-10-13.1"
+PROMPT_VERSION = "2026-10-13.2"
 MAX_INPUT_CHARS = 30_000
 
 FitLevel = Literal["high", "medium", "unknown"]
@@ -158,3 +158,65 @@ def chat(conn, context: str, messages: list[dict], contractor_id: str | None) ->
     record_trace(conn, "assistant", OPENAI_MODEL, contractor_id, None, context + str(messages), response.output_text,
                  usage.input_tokens if usage else None, usage.output_tokens if usage else None, started)
     return response.output_text
+
+
+class DraftPerson(BaseModel):
+    contact_id: int | None
+    name: str
+    role: str | None
+
+
+class InteractionDraft(BaseModel):
+    ready: bool
+    reply: str
+    mode: Literal["call", "email", "meeting", "text"] | None
+    outcome: Literal["Connected", "No response", "Follow-up needed", "Qualified", "Not relevant"] | None
+    people: list[DraftPerson]
+    note: str
+    next_action: str | None
+    due_date: str | None
+
+
+DRAFT_INSTRUCTIONS = """You turn a sales rep's chat messages into one interaction log entry for a contractor account.
+The rep may type casually, dictate by voice, or paste an email. Read the whole conversation; later messages correct earlier ones.
+
+mode: call, email, meeting or text. outcome:
+- Connected: reached someone and talked. - No response: no answer, voicemail, no reply.
+- Follow-up needed: talked, agreed to reconnect later. - Qualified: confirmed a real need for materials.
+- Not relevant: they are not a fit.
+people: only the people the rep actually spoke with, met, or exchanged messages with in this interaction.
+Leave out anyone who was only asked for, mentioned, unavailable, or is to be contacted later: listing someone
+marks them as verified. Reuse contact_id from the known people when the name matches; otherwise contact_id null
+with the name and role the rep gave.
+note: a short, clean summary in the rep's voice, keeping names, numbers, products and dates.
+next_action and due_date (yyyy-mm-dd): only if the rep stated or clearly implied them; resolve relative dates from today.
+ready: true when mode and outcome are clear. reply: one short sentence. If ready, say what you will save;
+if not, ask the single most important question. Never invent facts.
+
+"""
+
+
+def draft_interaction(conn, context: str, messages: list[dict], contractor_id: str) -> InteractionDraft:
+    global _client
+    _client = _client or OpenAI()
+    started = time.monotonic()
+    response = _client.responses.parse(model=OPENAI_MODEL, instructions=DRAFT_INSTRUCTIONS + context,
+                                       input=messages, text_format=InteractionDraft)
+    draft = response.output_parsed
+    if draft is None:
+        raise RuntimeError("log_draft: model returned no parsed output")
+    usage = response.usage
+    record_trace(conn, "log_draft", OPENAI_MODEL, contractor_id, None, context + str(messages), draft.model_dump_json(),
+                 usage.input_tokens if usage else None, usage.output_tokens if usage else None, started)
+    return draft
+
+
+def transcribe(conn, audio: bytes, content_type: str) -> str:
+    global _client
+    _client = _client or OpenAI()
+    started = time.monotonic()
+    extension = content_type.split("/")[-1].split(";")[0] or "webm"
+    result = _client.audio.transcriptions.create(model=TRANSCRIBE_MODEL, file=(f"note.{extension}", audio, content_type))
+    record_trace(conn, "transcription", TRANSCRIBE_MODEL, None, None, hashlib.sha256(audio).hexdigest(), result.text,
+                 None, None, started)
+    return result.text

@@ -165,6 +165,9 @@ CREATE TABLE IF NOT EXISTS contacts (
   phone TEXT,
   email TEXT,
   source TEXT NOT NULL,
+  -- Set only when a rep logs an interaction in which they actually reached this person.
+  verified_at TEXT,
+  verified_by INTEGER REFERENCES users(id),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL,
   UNIQUE (contractor_id, name)

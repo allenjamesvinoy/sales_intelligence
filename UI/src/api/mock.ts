@@ -247,8 +247,12 @@ export const mockApi: Api = {
     record(id, input.mode, input.outcome, input.note);
     Object.assign(detail(id).account, { stage: 'contacted', nextAction: input.nextAction || 'Follow up', dueDate: input.dueDate || todayIso() });
   },
+  draftInteraction: async () => ({ ready: false, reply: 'Logging by chat needs the backend. Set VITE_API_URL to connect it.', mode: null, outcome: null, people: [], note: '', nextAction: null, dueDate: null }),
+  transcribe: async () => {
+    throw new Error('Transcription needs the backend');
+  },
   addContact: async (id, person) => {
-    const created = { id: Date.now(), role: null, phone: null, email: null, ...person, source: 'Added by rep' };
+    const created = { id: Date.now(), role: null, phone: null, email: null, ...person, source: 'Added by rep', verified: false };
     detail(id).contacts.push(created);
     return created;
   },

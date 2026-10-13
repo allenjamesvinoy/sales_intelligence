@@ -107,9 +107,26 @@ export interface Person {
   email: string | null;
   /** "Company website", "Web research" or "Added by rep" */
   source: string;
+  /** True only once a rep logged an interaction in which they actually reached this person. */
+  verified: boolean;
+  verifiedBy?: string | null;
 }
 
 export type PersonInput = Pick<Person, 'name'> & Partial<Pick<Person, 'role' | 'phone' | 'email'>>;
+
+/** POST /accounts/:id/log-draft: the AI's reading of the rep's chat, for the rep to confirm. */
+export interface InteractionDraft {
+  ready: boolean;
+  /** One sentence back to the rep: what will be saved, or a question. */
+  reply: string;
+  mode: InteractionMode | null;
+  outcome: Outcome | null;
+  /** contactId is null for someone not yet on the account. */
+  people: { contactId: number | null; name: string; role: string | null }[];
+  note: string;
+  nextAction: string | null;
+  dueDate: string | null;
+}
 
 export interface ChatMessage {
   role: 'user' | 'assistant';

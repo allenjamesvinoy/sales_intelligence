@@ -4,14 +4,15 @@ import {
   EmptyState,
   EvidenceList,
   FitTag,
-  InteractionForm,
   MODE_LABEL as INTERACTION_MODES,
   NextAction,
   Notice,
   PersonDialog,
   PriorityBadge,
+  UnverifiedMark,
   openDialog,
 } from '../components';
+import { LogChat, focusLogChat } from './log-chat';
 import { append, cx, h, icon, type Child } from '../dom';
 import { formatDay, formatDistance, formatStamp, todayIso } from '../format';
 import { getLeadState, setStage, sync } from '../store';
@@ -43,7 +44,7 @@ export function renderDetail(lead: Lead | undefined): HTMLElement {
   const status = h('section', { className: 'section account-status' }, h('p', { className: 'lb-muted' }, 'Loading account…'));
   const chat = h('section', { className: 'section chat', 'aria-label': 'Account conversation' });
   const list = h('section', { className: 'section', 'aria-labelledby': 'log-title' }, h('h2', { className: 'section-title', id: 'log-title' }, 'Interactions'));
-  const people = details('People', true);
+  const people = details('Decision makers', true);
   const logButton = Button({ variant: 'primary', disabled: true }, icon('plus'), 'Log interaction');
   api
     .getAccount(lead.id)
@@ -54,7 +55,7 @@ export function renderDetail(lead: Lead | undefined): HTMLElement {
       append(list, [interactionList(detail.interactions)]);
       append(people, peopleList(lead.id, detail.contacts));
       logButton.disabled = false;
-      logButton.addEventListener('click', () => openLog(lead, detail.contacts));
+      logButton.addEventListener('click', focusLogChat);
     })
     .catch(() => status.replaceChildren(Notice({ tone: 'error', title: 'Account could not load' })));
 
@@ -153,10 +154,11 @@ function nextActionForm(id: string, account: Account): HTMLElement {
   return form;
 }
 
-function chatPanel(lead: Lead, board: Stage, { account, interactions: log }: AccountDetail): Child[] {
+function chatPanel(lead: Lead, board: Stage, { account, contacts, interactions: log }: AccountDetail): Child[] {
   const canConvert = board !== 'recommended' && (account.stage === 'researching' || account.stage === 'contacted');
   return [
     h('div', { className: 'chat-thread' }, bubble(summary(lead, account, log))),
+    LogChat(lead.id, contacts),
     canConvert && h('div', { className: 'chat-composer' }, opportunityForm(lead.id)),
   ];
 }
@@ -217,25 +219,11 @@ function openInteraction(i: Interaction): void {
   );
 }
 
-function openLog(lead: Lead, contacts: Person[]): void {
-  const dialog = openDialog(
-    `Log interaction with ${lead.name}`,
-    InteractionForm({
-      people: contacts,
-      addPerson: () => PersonDialog((input) => api.addContact(lead.id, input)),
-      onSave: async (input) => {
-        await sync(api.logInteraction(lead.id, input));
-        dialog.close();
-      },
-    }),
-  );
-}
-
 /** Everyone known at the contractor, editable by any rep. */
 function peopleList(id: string, contacts: Person[]): Child[] {
   const changed = () => window.dispatchEvent(new Event('leads:changed'));
-  const add = Button({ size: 'sm', onClick: async () => (await PersonDialog((input) => api.addContact(id, input))) && changed() }, icon('plus'), 'Add person');
-  if (contacts.length === 0) return [h('p', { className: 'lb-muted' }, 'No one identified yet.'), add];
+  const add = Button({ size: 'sm', onClick: async () => (await PersonDialog((input) => api.addContact(id, input))) && changed() }, icon('plus'), 'Add decision maker');
+  if (contacts.length === 0) return [h('p', { className: 'lb-muted' }, 'No decision makers identified yet.'), add];
   return [
     h(
       'ul',
@@ -248,10 +236,11 @@ function peopleList(id: string, contacts: Person[]): Child[] {
             'div',
             { className: 'people-main' },
             h('b', null, p.name),
+            !p.verified && UnverifiedMark(p.source),
             p.role && h('span', { className: 'lb-muted' }, p.role),
             p.phone && h('a', { className: 'lb-link', href: `tel:${p.phone}` }, p.phone),
             p.email && h('a', { className: 'lb-link', href: `mailto:${p.email}` }, p.email),
-            h('span', { className: 'lb-help' }, p.source),
+            h('span', { className: 'lb-help' }, p.verified ? `Verified by ${p.verifiedBy}` : p.source),
           ),
           Button({ size: 'sm', variant: 'quiet', onClick: async () => (await PersonDialog((input) => api.updateContact(id, p.id, input), p)) && changed() }, 'Edit'),
         ),

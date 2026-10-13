@@ -5,12 +5,9 @@
 import { cx, h, icon, type Child } from './dom';
 import { formatDay, formatDistance, todayIso } from './format';
 import {
-  MODES,
-  OUTCOMES,
   type Contact,
   type EvidenceItem,
   type FitLevel,
-  type InteractionInput,
   type InteractionMode,
   type Person,
   type PersonInput,
@@ -68,7 +65,6 @@ export interface LeadCardProps {
   name: string;
   location: string;
   distanceMi?: number | null;
-  priority?: Priority;
   reason?: string;
   categories?: string[];
   contact: Contact;
@@ -88,7 +84,6 @@ export function LeadCard(p: LeadCardProps): HTMLElement {
       'div',
       { className: 'lb-card-head' },
       h('h3', { className: 'lb-card-title' }, h('a', { className: 'lb-card-open', href: p.href, draggable: 'false' }, p.name)),
-      p.priority && PriorityBadge(p.priority),
     ),
     h(
       'div',
@@ -132,7 +127,7 @@ function CardContact({ person, phone }: Contact): HTMLElement {
       'span',
       { className: 'lb-card-contact' },
       icon('user'),
-      person ? [h('b', null, person.name), `, ${person.role}`] : 'Ask for the owner',
+      person ? [h('b', null, person.name), person.role && `, ${person.role}`, !person.verified && UnverifiedMark(person.source)] : 'Ask for the owner',
     ),
     phone && h('a', { className: 'lb-link lb-card-contact', href: `tel:${phone}` }, icon('phone'), phone),
   );
@@ -256,56 +251,16 @@ export function EvidenceList(items: EvidenceItem[]): HTMLElement {
   );
 }
 
-let formCount = 0;
 
-/** A single-choice chip row with arrow-key navigation (ARIA radio group). */
-function ChipGroup<T extends string>(label: string, options: readonly T[], text: (o: T) => string, onChange: (o: T) => void) {
-  const id = `chips-${++formCount}`;
-  let value: T | null = null;
-  const chips = options.map((o) =>
-    h('button', { type: 'button', role: 'radio', 'aria-checked': 'false', className: 'lb-chip', tabindex: '-1' }, text(o)),
-  );
-  chips[0].tabIndex = 0;
-
-  function select(i: number): void {
-    value = options[i];
-    chips.forEach((chip, j) => {
-      chip.setAttribute('aria-checked', String(i === j));
-      chip.tabIndex = i === j ? 0 : -1;
-      chip.replaceChildren(...(i === j ? [icon('check')] : []), text(options[j]));
-    });
-    onChange(value);
-  }
-
-  chips.forEach((chip, i) => {
-    chip.addEventListener('click', () => select(i));
-    chip.addEventListener('keydown', (e) => {
-      const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
-      if (!step) return;
-      e.preventDefault();
-      const next = (i + step + chips.length) % chips.length;
-      select(next);
-      chips[next].focus();
-    });
-  });
-
-  const el = h(
-    'div',
-    { className: 'lb-field' },
-    h('span', { className: 'lb-label', id }, label),
-    h('div', { className: 'lb-chips', role: 'radiogroup', 'aria-labelledby': id }, chips),
-  );
-  return { el, value: () => value };
+/** Amber mark for contact details found on the web that no rep has confirmed by reaching the person. */
+export function UnverifiedMark(source?: string): HTMLElement {
+  const tip = source === 'Added by rep'
+    ? 'Unverified: no one has reached this person yet. Confirm the name and role on the call.'
+    : 'Unverified: found on the web. Confirm the name and role on the call.';
+  return h('span', { className: 'unverified', title: tip }, icon('alert'), h('span', { className: 'sr-only' }, tip));
 }
 
 export const MODE_LABEL: Record<InteractionMode, string> = { call: 'Call', email: 'Email', meeting: 'Meeting', text: 'Text' };
-const NOTE_LABEL: Record<InteractionMode, [string, string]> = {
-  call: ['Call notes', 'What did you learn?'],
-  email: ['Email content', 'Paste the email you sent or received'],
-  meeting: ['Meeting notes', 'Who was there, what was discussed, what was agreed'],
-  text: ['Message', 'Paste the text thread'],
-};
-
 /** A modal dialog that removes itself when closed. */
 export function openDialog(title: string, ...children: Child[]): HTMLDialogElement {
   const close = Button({ size: 'sm', variant: 'quiet', onClick: () => dialog.close() }, 'Close');
@@ -320,94 +275,6 @@ export function openDialog(title: string, ...children: Child[]): HTMLDialogEleme
   document.body.append(dialog);
   dialog.showModal();
   return dialog;
-}
-
-export interface InteractionFormProps {
-  people: Person[];
-  /** Opens the add-person form; resolves with the new person, or null if cancelled. */
-  addPerson: () => Promise<Person | null>;
-  onSave: (input: InteractionInput) => Promise<void>;
-}
-
-/** Log a call, email, meeting or text: who was involved, what happened, and what happens next. */
-export function InteractionForm({ people, addPerson, onSave }: InteractionFormProps): HTMLElement {
-  const uid = `interaction-${++formCount}`;
-  const save = Button({ variant: 'primary', type: 'submit', disabled: true }, 'Log interaction');
-  const error = h('p', { className: 'lb-field-error', role: 'alert' });
-  const noteLabel = h('span', { className: 'lb-label' });
-  const note = h('textarea', { className: 'lb-input', id: `${uid}-note`, rows: '4' });
-  const sync = () => {
-    save.disabled = !mode.value() || !outcome.value();
-    error.textContent = '';
-    const [label, hint] = NOTE_LABEL[mode.value() ?? 'call'];
-    noteLabel.textContent = label;
-    note.placeholder = hint;
-  };
-  const mode = ChipGroup('How', MODES, (m) => MODE_LABEL[m], sync);
-  const outcome = ChipGroup('Outcome', OUTCOMES, (o) => o, sync);
-  const next = h('input', { className: 'lb-input', id: `${uid}-next`, placeholder: 'Leave blank for the suggested step' });
-  const due = h('input', { className: 'lb-input', type: 'date', id: `${uid}-due`, min: todayIso() });
-
-  const selected = new Set<number>();
-  const personChip = (p: Person) => {
-    const chip = h('button', { type: 'button', role: 'checkbox', 'aria-checked': 'false', className: 'lb-chip' }, p.name, p.role && h('span', { className: 'lb-muted' }, ` · ${p.role}`));
-    chip.addEventListener('click', () => {
-      const on = !selected.has(p.id);
-      if (on) selected.add(p.id);
-      else selected.delete(p.id);
-      chip.setAttribute('aria-checked', String(on));
-    });
-    return chip;
-  };
-  const chips = h('div', { className: 'lb-chips', role: 'group', 'aria-labelledby': `${uid}-people` }, people.map(personChip));
-  const add = Button({ size: 'sm', variant: 'quiet' }, icon('plus'), 'Add person');
-  add.addEventListener('click', async () => {
-    const person = await addPerson();
-    if (!person) return;
-    const chip = personChip(person);
-    chips.insertBefore(chip, add);
-    chip.click();
-  });
-  chips.append(add);
-
-  const form = h(
-    'form',
-    { className: 'lb-outcome', novalidate: true },
-    mode.el,
-    h('div', { className: 'lb-field' }, h('span', { className: 'lb-label', id: `${uid}-people` }, 'Talked to'), chips),
-    outcome.el,
-    h('label', { className: 'lb-field', for: `${uid}-note` }, noteLabel, note),
-    h(
-      'div',
-      { className: 'lb-followup' },
-      h('label', { className: 'lb-field grow', for: `${uid}-next` }, h('span', { className: 'lb-label' }, 'Next action'), next),
-      h('label', { className: 'lb-field', for: `${uid}-due` }, h('span', { className: 'lb-label' }, 'Due'), due),
-    ),
-    save,
-    error,
-  );
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const m = mode.value(), o = outcome.value();
-    if (!m || !o) return;
-    if (o === 'Follow-up needed' && !due.value) {
-      error.textContent = 'Pick the follow-up date.';
-      due.focus();
-      return;
-    }
-    save.disabled = true;
-    await onSave({
-      mode: m,
-      outcome: o,
-      note: note.value.trim(),
-      contactIds: [...selected],
-      nextAction: next.value.trim() || undefined,
-      dueDate: due.value || undefined,
-    });
-  });
-  sync();
-  return form;
 }
 
 /** Add or edit someone at the contractor. Resolves with the saved person, or null if cancelled. */

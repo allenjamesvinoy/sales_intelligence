@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from .db import loads, now
 
 STAGES = ["discovered", "researching", "contacted", "opportunity", "customer"]
+REACHED = {"Connected", "Follow-up needed", "Qualified"}
 STAGE_LABELS = {"discovered": "Discovered", "researching": "Researching", "contacted": "Contacted",
                 "opportunity": "Opportunity", "customer": "Customer"}
 
@@ -32,8 +33,12 @@ def sync_contacts(conn, contractor_id: str) -> None:
 
 
 def contacts(conn, contractor_id: str) -> list[dict]:
-    return [dict(r) for r in conn.execute(
-        "SELECT id, name, role, phone, email, source FROM contacts WHERE contractor_id = ? ORDER BY id", (contractor_id,))]
+    return [{"id": r["id"], "name": r["name"], "role": r["role"], "phone": r["phone"], "email": r["email"],
+             "source": r["source"], "verified": r["verified_at"] is not None, "verifiedBy": r["verified_by"]}
+            for r in conn.execute(
+        """SELECT c.id, c.name, c.role, c.phone, c.email, c.source, c.verified_at, u.name AS verified_by
+           FROM contacts c LEFT JOIN users u ON u.id = c.verified_by WHERE c.contractor_id = ? ORDER BY c.id""",
+        (contractor_id,))]
 
 
 def next_best_action(conn, contractor_id: str, stage: str, last_outcome: str | None) -> tuple[str, int]:
@@ -60,6 +65,9 @@ def log(conn, contractor_id: str, user_id: int, mode: str, outcome: str, note: s
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (user_id, contractor_id, mode, outcome, note, next_action, due_date, now())).lastrowid
     conn.executemany("INSERT INTO activity_contacts VALUES (?, ?)", [(activity_id, c) for c in contact_ids])
+    if outcome in REACHED:
+        conn.executemany("UPDATE contacts SET verified_at = ?, verified_by = ? WHERE id = ? AND verified_at IS NULL",
+                         [(now(), user_id, c) for c in contact_ids])
 
 
 def set_stage(conn, contractor_id: str, user_id: int, stage: str, *, last_outcome: str | None = None,

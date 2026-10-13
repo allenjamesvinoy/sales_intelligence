@@ -20,7 +20,7 @@ const sortKey = (lead: Lead) => getLeadState(lead.id).order ?? lead.rank;
 const COLUMNS: { id: Column; title: string; empty: string }[] = [
   { id: 'recommended', title: 'Recommended', empty: 'All caught up' },
   { id: 'focus', title: 'My Focus', empty: 'Drag leads here' },
-  { id: 'done', title: 'Congrats!', empty: 'Your wins land here' },
+  { id: 'done', title: 'Done', empty: 'Nothing done yet' },
 ];
 
 /** One line a day to start the rep off. */
@@ -110,7 +110,6 @@ function card(lead: Lead, stage: Column): HTMLElement {
     name: lead.name,
     location: lead.location,
     distanceMi: lead.distanceMi,
-    priority: lead.priority,
     reason: lead.reason,
     categories: lead.categories,
     contact: lead.contact,

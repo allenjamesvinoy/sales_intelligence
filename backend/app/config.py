@@ -8,6 +8,7 @@ load_dotenv(ROOT / ".env")
 
 DATABASE_PATH = Path(os.getenv("DATABASE_PATH", ROOT / "data" / "instahermes.db"))
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+TRANSCRIBE_MODEL = os.getenv("TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
 APIFY_TOKEN = os.getenv("APIFY_TOKEN", "")
 APIFY_ACTOR = os.getenv("APIFY_ACTOR", "apify~website-content-crawler")
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY", "")

@@ -49,17 +49,19 @@ cd UI && npm install && npm run dev   # http://localhost:5173
 
 ## Sales journey
 
-Board columns (Recommended, My Focus, Congrats!) belong to each rep. The account journey is shared by the team:
+Board columns (Recommended, My Focus, Done) belong to each rep. The account journey is shared by the team:
 
 | # | Stage | Reached when |
 | --- | --- | --- |
 | 1 | Discovered | The contractor appears in a rep's ranked queue |
 | 2 | Researching | A rep saves it to My Focus |
 | 3 | Contacted | Anyone logs a call, email, text or visit |
-| 4 | Opportunity | A rep records a confirmed need (or drags it to Congrats!) |
+| 4 | Opportunity | A rep records a confirmed need (or drags it to Done) |
 | 5 | Customer | Future: needs order history for reorder, cross-sell and risk signals |
 
 Every account always has a stage, owner, next action, due date and recommendation reason. The next action is suggested from the stage and the last outcome (`backend/app/accounts.py`), and reps can override it.
+
+Decision makers found on the web start **unverified**. They become verified only when a rep logs an interaction that reached them (Connected, Follow-up needed or Qualified).
 
 ## AI traceability
 
@@ -75,8 +77,12 @@ Every account always has a stage, owner, next action, due date and recommendatio
 | `PUT` | `/leads/:id/stage` | `{ stage, order? }`: drag on the rep's board; the shared account stage follows |
 | `GET` | `/accounts/:id` | Shared account (stage, owner, next action, due date) and the team's interaction log |
 | `POST` | `/accounts/:id/interactions` | `{ mode, outcome, note, nextAction?, dueDate? }`: blank next action uses the suggested step |
-| `POST` | `/accounts/:id/opportunity` | `{ note }`: stage 4, a confirmed need; moves the card to Congrats! |
+| `POST` | `/accounts/:id/opportunity` | `{ note }`: stage 4, a confirmed need; moves the card to Done |
 | `PUT` | `/accounts/:id/next-action` | `{ nextAction, dueDate }` |
+| `POST` | `/accounts/:id/log-draft` | `{ messages }`: the rep's chat (typed, dictated or a pasted email) to a draft interaction to confirm |
+| `POST` | `/transcribe` | Raw audio body (e.g. `audio/webm`) to `{ text }` |
+| `POST` | `/accounts/:id/contacts`, `PUT …/contacts/:contactId` | Decision makers, shared by the team |
+| `POST` | `/assistant` | `{ messages, contractorId? }`: the floating assistant |
 | `GET` | `/leads/:id/trace` | Ranking factors and AI calls behind a lead |
 | `GET` | `/me` | Rep profile, territory, product focus, queue settings |
 

@@ -1,4 +1,4 @@
-import type { AccountDetail, LeadsResponse, Person, Profile } from '../types';
+import type { AccountDetail, InteractionDraft, LeadsResponse, Person, Profile } from '../types';
 import type { Api } from './index';
 
 export class ApiError extends Error {
@@ -29,6 +29,10 @@ export function httpApi(baseUrl: string): Api {
     getAccount: (id) => request<AccountDetail>(baseUrl, account(id)),
     logInteraction: (id, input) =>
       request(baseUrl, `${account(id)}/interactions`, { method: 'POST', body: JSON.stringify(input) }),
+    draftInteraction: (id, messages) =>
+      request<InteractionDraft>(baseUrl, `${account(id)}/log-draft`, { method: 'POST', body: JSON.stringify({ messages }) }),
+    transcribe: async (audio) =>
+      (await request<{ text: string }>(baseUrl, '/transcribe', { method: 'POST', body: audio, headers: { 'Content-Type': audio.type || 'audio/webm' } })).text,
     addContact: (id, person) => request<Person>(baseUrl, `${account(id)}/contacts`, { method: 'POST', body: JSON.stringify(person) }),
     updateContact: (id, contactId, person) =>
       request<Person>(baseUrl, `${account(id)}/contacts/${contactId}`, { method: 'PUT', body: JSON.stringify(person) }),

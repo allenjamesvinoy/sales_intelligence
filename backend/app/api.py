@@ -2,7 +2,7 @@ import re
 import sqlite3
 from typing import Literal
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from . import accounts, db, llm
@@ -57,8 +57,11 @@ class ChatMessage(BaseModel):
     content: str = Field(max_length=4000)
 
 
-class AssistantIn(BaseModel):
+class ChatIn(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1, max_length=20)
+
+
+class AssistantIn(ChatIn):
     contractorId: str | None = None
 
 
@@ -117,7 +120,7 @@ def to_lead(c, rank: int, final_score: float, reasons: list[dict], account: dict
         "evidence": evidence,
         "productFit": [{k: p[k] for k in ("category", "level", "reason", "question")} for p in web.get("product_fit", [])],
         "contact": {
-            "person": person and {"name": person["name"], "role": person["role"] or "", "verified": False,
+            "person": person and {"name": person["name"], "role": person["role"] or "", "verified": person["verified"],
                                   "source": person["source"]},
             "phone": c["phone"] or (person and person["phone"]) or next(iter(web.get("phones", [])), None),
             "email": (person and person["email"]) or next((e for e in web.get("emails", []) if EMAIL.match(e)), None),
@@ -381,7 +384,8 @@ def assistant_context(conn, uid: int, contractor_id: str | None) -> str:
         lines += [
             f"Open account: {c['name']}, {c['city']}, {c['state']}. Stage {a['stage']}, owner {a['owner_name']}, "
             f"next action '{a['next_action']}' due {a['due_date']}.",
-            "People: " + ("; ".join(f"{p['name']} ({p['role'] or 'role unknown'})" for p in accounts.contacts(conn, contractor_id)) or "none"),
+            "People: " + ("; ".join(f"{p['name']} ({p['role'] or 'role unknown'}, {'verified' if p['verified'] else 'unverified, found on the web'})"
+                                    for p in accounts.contacts(conn, contractor_id)) or "none"),
             f"GAF facts: {c['gaf_facts']}", f"Website facts: {c['website_facts']}",
             "Interaction log (newest first): " + ("; ".join(
                 f"{r['created_at'][:16]} {r['name']} {r['mode']}: {r['outcome']} {r['note']}" for r in log) or "none"),
@@ -409,3 +413,26 @@ def post_assistant(body: AssistantIn, uid: int = Depends(user_id), conn=Depends(
     with conn:
         reply = llm.chat(conn, context, [m.model_dump() for m in body.messages], body.contractorId)
     return {"reply": reply}
+
+
+@app.post("/accounts/{contractor_id}/log-draft")
+def post_log_draft(contractor_id: str, body: ChatIn, uid: int = Depends(user_id), conn=Depends(get_conn)):
+    """Turns the rep's chat (typed, dictated or pasted) into a draft interaction for them to confirm."""
+    require_contractor(conn, contractor_id)
+    known = "; ".join(f"id {p['id']}: {p['name']} ({p['role'] or 'role unknown'})" for p in accounts.contacts(conn, contractor_id))
+    context = f"Today: {now()[:10]}. Rep: {get_me(uid, conn)['profile']['name']}. Known people: {known or 'none'}."
+    with conn:
+        d = llm.draft_interaction(conn, context, [m.model_dump() for m in body.messages], contractor_id)
+    return {"ready": d.ready, "reply": d.reply, "mode": d.mode, "outcome": d.outcome, "note": d.note,
+            "people": [{"contactId": p.contact_id, "name": p.name, "role": p.role} for p in d.people],
+            "nextAction": d.next_action, "dueDate": d.due_date}
+
+
+@app.post("/transcribe")
+async def post_transcribe(request: Request, conn=Depends(get_conn)):
+    """Raw audio body (e.g. audio/webm from the browser recorder) to text."""
+    audio = await request.body()
+    if not audio or len(audio) > 25 * 1024 * 1024:
+        raise HTTPException(422, "Send between 1 byte and 25 MB of audio")
+    with conn:
+        return {"text": llm.transcribe(conn, audio, request.headers.get("content-type", "audio/webm"))}
